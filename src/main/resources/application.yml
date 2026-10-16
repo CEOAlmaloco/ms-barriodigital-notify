@@ -1,0 +1,21 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: ms-barriodigital-notify
+  config:
+    import: optional:file:.env[.properties]
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+  health:
+    # Sin broker el health quedaría DOWN. EP2-14 lo reactiva junto con la conexión a RabbitMQ.
+    rabbit:
+      enabled: false
