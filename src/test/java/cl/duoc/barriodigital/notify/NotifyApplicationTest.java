@@ -13,7 +13,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Sin broker: el contexto levanta y el health responde UP porque el indicador de RabbitMQ está apagado.
+ * Sin broker: el contexto levanta y el health responde UP porque src/test/resources apaga el indicador de RabbitMQ.
+ * Fuera de los tests el indicador está activo y sin broker el health queda DOWN.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
