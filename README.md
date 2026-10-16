@@ -18,11 +18,54 @@ No es público. No pasa por el API Gateway ni por el BFF: solo habla con el brok
 
 Los contratos están en `barriodigital-infra/docs/decisiones.md`: mensajería (EP2-01), topología (EP2-02) y ACK, reintentos y DLQ (EP2-03).
 
-## Estado (EP2-13)
+## Estado (EP2-14)
 
-Esqueleto: arranca, expone `/actuator/health` y no conecta al broker. La conexión, la topología y los consumidores llegan con EP2-14 a EP2-18.
+Conecta al broker y, al abrir la conexión, declara la topología del contrato EP2-02: 3 exchanges, 6 colas y 9 bindings. Los consumidores, el ACK manual y los reintentos llegan con EP2-15 a EP2-18.
 
-El starter de AMQP trae el health de RabbitMQ. Sin broker dejaría el health en DOWN, así que `management.health.rabbit.enabled` está en false hasta EP2-14.
+La conexión no se abre al arrancar: se abre con el primer uso. Hoy, sin consumidores, ese uso es el primer `GET /actuator/health`.
+
+El health de RabbitMQ está activo. `/actuator/health` en `UP` significa que notify se conectó al broker, y la topología se declara en esa misma conexión. Sin broker responde `DOWN`.
+
+## Variables
+
+Se leen del entorno o de un `.env` en la raíz del módulo (plantilla en `.env.example`).
+
+| Variable | Por defecto | Qué es |
+|---|---|---|
+| `RABBIT_ADDRESSES` | `localhost:5672` | Nodos separados por coma |
+| `RABBIT_USER` | `barriodigital` | Usuario del broker |
+| `RABBIT_PASSWORD` | ninguno | Password del broker. Sin ella la app arranca, pero no se conecta y el health queda `DOWN` |
+
+En local solo el nodo 1 del clúster publica el `5672` en el host. El nodo 2 no abre puertos, por eso el valor por defecto lleva solo `localhost`. Dentro de la red del compose del clúster se pueden poner los dos: `rabbitmq-1:5672,rabbitmq-2:5672`.
+
+El timeout de conexión es de 2000 ms (`spring.rabbitmq.connection-timeout`).
+
+## Topología
+
+Los nombres viven en `barriodigital.rabbit` de `application.yml`, con las mismas claves que usan requests y mq-admin. Si falta una clave, la app no arranca. Ninguna clase de negocio escribe un nombre: los beans de `RabbitTopologyConfig` los leen de `RabbitNamesProperties`.
+
+| Clave | Valor |
+|---|---|
+| `exchange.topic` | `cmd.topic` |
+| `exchange.direct` | `cmd.direct` |
+| `exchange.dead` | `cmd.dead.dlx` |
+| `queue.email` | `q.cmd.email` |
+| `queue.email-dlq` | `q.cmd.email.dlq` |
+| `queue.crew` | `q.cmd.crew` |
+| `queue.crew-dlq` | `q.cmd.crew.dlq` |
+| `queue.certificate` | `q.cmd.certificate` |
+| `queue.certificate-dlq` | `q.cmd.certificate.dlq` |
+| `routing.email-send` | `email.send` |
+| `routing.email-topic` | `email.*` |
+| `routing.crew-ticket` | `crew.ticket` |
+| `routing.crew-topic` | `crew.#` |
+| `routing.certificate-gen` | `certificate.gen` |
+| `routing.certificate-topic` | `certificate.*` |
+| `routing.email-dead` | `email.dead` |
+| `routing.crew-dead` | `crew.dead` |
+| `routing.certificate-dead` | `certificate.dead` |
+
+Exchanges y colas son durables y sin auto-delete. Las tres colas principales son clásicas y llevan `x-dead-letter-exchange=cmd.dead.dlx` y `x-dead-letter-routing-key` con su `*.dead`. Las DLQ no llevan argumentos. notify declara también los exchanges para quedar healthy sin esperar a requests; declarar dos veces lo mismo no cambia nada.
 
 ## Paquetes
 
@@ -44,13 +87,20 @@ Cada paquete tiene un `package-info.java` con su responsabilidad, porque Git no 
 .\mvnw.cmd -B clean verify
 ```
 
-Los tests levantan el contexto sin broker y revisan que `GET /actuator/health` responda `UP`.
+Los tests no necesitan broker. Revisan los nombres, tipos y argumentos de la topología, que la app no arranque si falta una clave, y que el contexto levante. `src/test/resources/application.properties` apaga el health de RabbitMQ y pone una password de prueba.
 
 ## Arranque
 
-No necesita `.env` ni base de datos.
+No usa base de datos. Necesita el clúster de `barriodigital-infra/mq` arriba.
 
 ```powershell
+# en barriodigital-infra
+copy mq\.env.example mq\.env
+# editar mq\.env
+docker compose -f mq/compose.yml up -d
+
+# en ms-barriodigital-notify, con la password de mq\.env
+$env:RABBIT_PASSWORD="..."
 .\mvnw.cmd spring-boot:run
 ```
 
@@ -60,17 +110,36 @@ curl http://localhost:8083/actuator/health
 
 Responde `{"status":"UP"}`.
 
+En el Management UI ([http://127.0.0.1:15672](http://127.0.0.1:15672), usuario y password de `mq\.env`):
+
+- Exchanges: `cmd.topic`, `cmd.direct` y `cmd.dead.dlx`.
+- Queues: `q.cmd.email`, `q.cmd.crew`, `q.cmd.certificate` y sus tres `.dlq`.
+- En cada cola principal, la pestaña Bindings muestra un binding desde `cmd.direct` y otro desde `cmd.topic`. En cada DLQ, uno desde `cmd.dead.dlx`.
+
+También por consola:
+
+```powershell
+docker exec rabbitmq-1 rabbitmqctl list_exchanges
+docker exec rabbitmq-1 rabbitmqctl list_queues name durable arguments
+docker exec rabbitmq-1 rabbitmqctl list_bindings
+```
+
 ## Docker
 
-La imagen no lleva `.env`. `.dockerignore` deja fuera `target/` y `.env`.
+La imagen no lleva `.env`. `.dockerignore` deja fuera `target/` y `.env`. Las variables `RABBIT_*` van al contenedor.
 
 ```powershell
 docker build -t bd-notify .
 
-docker run --rm -p 8083:8083 bd-notify
+docker run --rm -p 8083:8083 `
+  -e RABBIT_ADDRESSES=host.docker.internal:5672 `
+  -e RABBIT_PASSWORD=******** `
+  bd-notify
 ```
 
-`GET http://localhost:8083/actuator/health` responde `{"status":"UP"}`.
+`GET http://localhost:8083/actuator/health` responde `{"status":"UP"}` cuando conectó al broker.
+
+`host.docker.internal` aplica a Docker Desktop y solo alcanza el nodo 1, que es el único que publica el `5672` en el host. En compose se usarán los dos nodos con EP2-28.
 
 ## Git
 
