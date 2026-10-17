@@ -1,12 +1,16 @@
 package cl.duoc.barriodigital.notify;
 
+import cl.duoc.barriodigital.notify.messaging.ManualAckProcessor;
 import org.junit.jupiter.api.Test;
+import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -29,6 +33,16 @@ class NotifyApplicationTest {
     @Test
     void elContextoCargaSinBroker() {
         assertNotNull(context.getBean(NotifyApplication.class));
+    }
+
+    @Test
+    void elListenerQuedaConLaPoliticaDeAck() {
+        RabbitProperties.SimpleContainer listener = context.getBean(RabbitProperties.class).getListener().getSimple();
+
+        assertEquals(AcknowledgeMode.MANUAL, listener.getAcknowledgeMode());
+        assertEquals(10, listener.getPrefetch());
+        assertEquals(Boolean.FALSE, listener.getDefaultRequeueRejected());
+        assertNotNull(context.getBean(ManualAckProcessor.class));
     }
 
     @Test

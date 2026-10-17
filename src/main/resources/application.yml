@@ -12,6 +12,12 @@ spring:
     password: ${RABBIT_PASSWORD}
     # Milisegundos. Contrato EP2-02.
     connection-timeout: 2000
+    # Contrato EP2-03: el listener confirma a mano y nada vuelve solo a la cola. Prefetch 10.
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 10
+        default-requeue-rejected: false
 
 # Contrato EP2-02 (docs/decisiones.md en barriodigital-infra). Mismas claves en requests y mq-admin.
 barriodigital:
