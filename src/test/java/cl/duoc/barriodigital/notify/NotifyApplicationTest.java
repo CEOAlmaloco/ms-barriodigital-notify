@@ -3,6 +3,8 @@ package cl.duoc.barriodigital.notify;
 import cl.duoc.barriodigital.notify.messaging.ManualAckProcessor;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AcknowledgeMode;
+import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
+import org.springframework.amqp.rabbit.listener.AbstractMessageListenerContainer;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -12,6 +14,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -20,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Sin broker: el contexto levanta y el health responde UP porque src/test/resources apaga el indicador de RabbitMQ.
  * Fuera de los tests el indicador está activo y sin broker el health queda DOWN.
  */
-@SpringBootTest
+@SpringBootTest(properties = "barriodigital.rabbit.queue.email=q.test.email.configurada")
 @AutoConfigureMockMvc
 class NotifyApplicationTest {
 
@@ -50,5 +53,14 @@ class NotifyApplicationTest {
         mockMvc.perform(get("/actuator/health"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    @Test
+    void listenerUsaLaColaConfiguradaYNoArrancaSinBrokerEnPruebas() {
+        var containers = context.getBean(RabbitListenerEndpointRegistry.class).getListenerContainers();
+        assertThat(containers).hasSize(1);
+        var listener = (AbstractMessageListenerContainer) containers.iterator().next();
+        assertThat(listener.getQueueNames()).containsExactly("q.test.email.configurada");
+        assertThat(listener.isRunning()).isFalse();
     }
 }
