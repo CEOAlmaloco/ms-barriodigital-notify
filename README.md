@@ -18,17 +18,17 @@ No es público. No pasa por el API Gateway ni por el BFF: solo habla con el brok
 
 Los contratos están en `barriodigital-infra/docs/decisiones.md`: mensajería (EP2-01), topología (EP2-02) y ACK, reintentos y DLQ (EP2-03).
 
-## Estado (EP2-15)
+## Estado (EP2-16)
 
-Conecta al broker y, al abrir la conexión, declara la topología del contrato EP2-02: 3 exchanges, 6 colas y 9 bindings. Tiene lista la política de ACK manual, reintentos e idempotencia (EP2-15), pero todavía no hay `@RabbitListener`: los consumidores de email, cuadrilla y certificado llegan con EP2-16 a EP2-18.
+Conecta al broker y, al abrir la conexión, declara la topología del contrato EP2-02: 3 exchanges, 6 colas y 9 bindings. EP2-16 incorpora el listener de email, reutilizando sin cambios el ACK manual, los reintentos y la idempotencia de EP2-15. Cuadrillas (EP2-17) y certificados (EP2-18) siguen pendientes. La publicación desde requests corresponde a otras tareas; el consumidor puede validarse con mensajes sintéticos.
 
-La conexión no se abre al arrancar: se abre con el primer uso. Hoy, sin consumidores, ese uso es el primer `GET /actuator/health`.
+El listener inicia la conexión al arrancar. Recibe el `Message` y el `Channel` y los entrega al procesador compartido antes de validar el tipo y el payload. No hay conversión automática de DTO previa al procesador.
 
-El health de RabbitMQ está activo. `/actuator/health` en `UP` significa que notify se conectó al broker, y la topología se declara en esa misma conexión. Sin broker responde `DOWN`.
+El health de RabbitMQ está activo. `/actuator/health` en `UP` significa que notify se conectó al broker, y la topología se declara en esa misma conexión. Sin broker responde `DOWN`. El indicador de correo está desactivado: el health no abre una conexión SMTP y no acredita entrega de correos.
 
 ## Variables
 
-Se leen del entorno o de un `.env` en la raíz del módulo (plantilla en `.env.example`).
+Se leen del entorno o de un `.env` en la raíz del módulo (plantilla en `.env.example`). Ese archivo se carga explícitamente mediante `spring.config.import: optional:file:.env[.properties]`; no depende de una carga automática de dotenv.
 
 | Variable | Por defecto | Qué es |
 |---|---|---|
@@ -39,6 +39,72 @@ Se leen del entorno o de un `.env` en la raíz del módulo (plantilla en `.env.e
 En local solo el nodo 1 del clúster publica el `5672` en el host. El nodo 2 no abre puertos, por eso el valor por defecto lleva solo `localhost`. Dentro de la red del compose del clúster se pueden poner los dos: `rabbitmq-1:5672,rabbitmq-2:5672`.
 
 El timeout de conexión es de 2000 ms (`spring.rabbitmq.connection-timeout`).
+
+## Correos: payload y contenido
+
+El listener usa `barriodigital.rabbit.queue.email`. Acepta exclusivamente los tres tipos de la tabla:
+
+| type | Asunto exacto | Mensaje principal exacto |
+|---|---|---|
+| `email.admitted` | BarrioDigital: trámite admitido | Tu trámite fue admitido para su gestión. |
+| `email.visit` | BarrioDigital: trámite en terreno | Tu trámite pasó a la etapa de atención en terreno. |
+| `email.resolved` | BarrioDigital: trámite resuelto | Tu trámite fue marcado como resuelto. |
+
+El payload es un objeto con estos campos:
+
+- `solicitanteEmail`: obligatorio, textual y no vacío tras recortar espacios. Debe ser una dirección única válida según Jakarta Mail, sin consulta DNS. No se admiten listas, grupos, nombres visibles ni saltos de línea. Se conserva la capitalización.
+- `requestId`, `procedureType`, `procedureLabel`, `address`: opcionales. Admiten ausencia, null y texto vacío. Un valor no nulo de otro tipo JSON es un error no recuperable. Los textos se recortan para presentarlos, sin modificar el payload.
+
+Una única composición produce el texto plano para ambos senders. Tras el mensaje principal aparece una línea en blanco y:
+
+```text
+Trámite: <procedureLabel, si tiene texto; si no, procedureType; si no, Trámite vecinal>
+Identificador: <requestId, solo cuando tiene texto>
+Dirección: <address, solo cuando tiene texto>
+```
+
+No consulta otros servicios ni copia etiquetas del catálogo. No personaliza el saludo, inventa fechas de visita ni añade HTML o adjuntos. SMTP codifica asunto y cuerpo en UTF-8.
+
+El parser común exige `type` y `eventId` textuales no vacíos y `payload` objeto. Permite omitir `timestamp`, `traceId` y `correlationId`; no comprueba que los identificadores sean UUID. Si `timestamp` contiene texto, debe poder convertirse a `Instant`. EP2-16 conserva estas reglas de EP2-15.
+
+## Selección de EmailSender y SMTP
+
+`barriodigital.email.mode` selecciona un único sender. El valor predeterminado es `logging`; `smtp` requiere activación explícita. Un valor desconocido impide iniciar por error de binding de la propiedad.
+
+Logging no necesita host, remitente ni credenciales. Registra, por ejemplo, `email-simulado type=email.visit entrega-real=false`: es una simulación sin entrega real. No registra destinatario, dirección, cuerpo ni sobre completo. Al terminar el log, el procesador confirma el mensaje.
+
+SMTP usa `JavaMailSender`, con un envío por invocación. Sus propiedades estándar pueden sobrescribirse con la configuración de Spring; las variables siguientes se enlazan explícitamente desde `application.yml`:
+
+| Variable | Propiedad | Predeterminado / regla |
+|---|---|---|
+| `EMAIL_MODE` | `barriodigital.email.mode` | `logging` |
+| `EMAIL_FROM` | `barriodigital.email.from` | Sin remitente; dirección única obligatoria en SMTP |
+| `SMTP_HOST` | `spring.mail.host` | Vacío; obligatorio en SMTP |
+| `SMTP_PORT` | `spring.mail.port` | 25; entre 1 y 65535 |
+| `SMTP_USER` | `spring.mail.username` | Sin usuario |
+| `SMTP_PASSWORD` | `spring.mail.password` | Sin contraseña |
+| `SMTP_AUTH` | `spring.mail.properties[mail.smtp.auth]` | false; si es true, exige usuario y contraseña |
+| `SMTP_STARTTLS_ENABLE` | `spring.mail.properties[mail.smtp.starttls.enable]` | false |
+| `SMTP_STARTTLS_REQUIRED` | `spring.mail.properties[mail.smtp.starttls.required]` | false |
+| `SMTP_CONNECTION_TIMEOUT` | `spring.mail.properties[mail.smtp.connectiontimeout]` | 5000 ms |
+| `SMTP_READ_TIMEOUT` | `spring.mail.properties[mail.smtp.timeout]` | 5000 ms |
+| `SMTP_WRITE_TIMEOUT` | `spring.mail.properties[mail.smtp.writetimeout]` | 5000 ms |
+
+Los tres timeouts deben ser enteros positivos y finitos. Se usa el protocolo `smtp`, con STARTTLS configurable, sin proveedor predeterminado. No se exigen credenciales si la autenticación está desactivada. `spring.mail.test-connection` y `management.health.mail.enabled` quedan en false: no hay conexión SMTP de prueba al iniciar ni al consultar health.
+
+Los secretos se suministran por entorno o `.env` local. `.gitignore` y `.dockerignore` ya excluyen ese archivo. `.env.example` solo contiene la plantilla.
+
+### Errores y límites de entrega
+
+- Tipo desconocido, destinatario inválido o campo opcional de tipo incorrecto: `NonRecoverableException`, sin envío, rechazo sin requeue y log `intentos=0`.
+- Autenticación rechazada, dirección inválida o respuesta SMTP permanente identificable (5xx): `NonRecoverableException`.
+- Conexión rechazada, timeout, error de transporte con causa de E/S o respuesta SMTP temporal (4xx): `RecoverableException`.
+- Se recorren causas, excepciones encadenadas de Jakarta Mail y errores individuales envueltos en `MailSendException`. Una lista de direcciones inválidas de `SendFailedException` también identifica un fallo permanente, salvo que haya una causa temporal explícita. Se conserva la causa original; el motivo clasificado no incorpora destinatarios ni respuestas del servidor. Si hay una causa permanente explícita identificada, prevalece sobre las temporales.
+- Una excepción inesperada no clasificable conserva la política de EP2-15: se reintenta. No se transforma todo `MailSendException` en error permanente ni se retorna éxito tras un fallo.
+
+Solo `ManualAckProcessor` reintenta: tres intentos totales con un segundo entre ellos. No hay retry adicional en el sender ni en Spring. El ACK ocurre después de que el sender termine; agotados los intentos se hace NACK sin requeue. RabbitMQ enruta el rechazo/NACK hacia `q.cmd.email.dlq`.
+
+SMTP aceptado no garantiza llegada a la bandeja del destinatario. Un fallo de transporte puede dejar incierto si el servidor aceptó el mensaje. Los reintentos y la deduplicación en memoria no garantizan exactamente un envío. La marca se guarda después del handler y antes de intentar el ACK; un fallo del ACK queda registrado. EP2-16 no incorpora recuperación durable ni otra política de idempotencia.
 
 ## Topología
 
@@ -129,7 +195,82 @@ Cada paquete tiene un `package-info.java` con su responsabilidad, porque Git no 
 .\mvnw.cmd -B clean verify
 ```
 
-Los tests no necesitan broker. Revisan los nombres, tipos y argumentos de la topología, que la app no arranque si falta una clave, que el contexto levante con la política de ACK, y cada caso de `ManualAckProcessor` con un `Channel` simulado y una espera que no duerme. `src/test/resources/application.properties` apaga el health de RabbitMQ y pone una password de prueba.
+Los tests no necesitan broker ni SMTP. Revisan topología, propiedades, política compartida, composición de los tres correos, validación, orden envío/ACK, duplicados y clasificación de fallos SMTP envueltos. Usan `Channel` y `JavaMailSender` simulados; el mensaje MIME sí se construye y serializa para comprobar UTF-8. `ApplicationContextRunner` comprueba selección y errores de configuración sin enviar. `src/test/resources/application.properties` apaga los health de RabbitMQ y correo, desactiva `spring.rabbitmq.listener.simple.auto-startup` y pone una password de prueba. Los listeners siguen activos en la configuración normal.
+
+Se requiere Java 21. Si el wrapper falla en PowerShell con `No se puede indizar en una matriz nula` al consultar `Target[0]`, puede invocarse directamente la distribución Maven 3.9.6 ya instalada por el wrapper, sin modificarlo:
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-21'
+$env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+$notifyMaven = Get-ChildItem "$env:USERPROFILE\.m2\wrapper\dists\apache-maven-3.9.6" -Recurse -Filter mvn.cmd | Select-Object -First 1
+& $notifyMaven.FullName -B clean verify
+```
+
+## Validación posterior con broker local aislado
+
+Procedimiento manual pendiente de ejecutar; no forma parte de los tests automatizados. Usa un contenedor dedicado sin volúmenes compartidos, con puertos distintos a los del clúster del proyecto. Las credenciales siguientes son ficticias y exclusivas de esta demo local. No apuntar estos pasos a un broker compartido.
+
+En una primera consola:
+
+```powershell
+docker run --rm -d --name bd-ep2-email-demo `
+  -p 127.0.0.1:5679:5672 -p 127.0.0.1:15679:15672 `
+  -e RABBITMQ_DEFAULT_USER=ep2-demo -e RABBITMQ_DEFAULT_PASS=solo-demo-local `
+  rabbitmq:3.12-management-alpine
+docker exec bd-ep2-email-demo rabbitmq-diagnostics -q ping
+```
+
+Esperar a que el diagnóstico responda correctamente. Desde la raíz de Notify, iniciar con Java 21 en esa consola y dejarla abierta:
+
+```powershell
+$env:RABBIT_ADDRESSES = 'localhost:5679'
+$env:RABBIT_USER = 'ep2-demo'
+$env:RABBIT_PASSWORD = 'solo-demo-local'
+$env:EMAIL_MODE = 'logging'
+.\mvnw.cmd spring-boot:run
+```
+
+Si aplica, usar la distribución del wrapper descrita antes con el objetivo `spring-boot:run`. En otra consola PowerShell, con Notify healthy:
+
+```powershell
+Invoke-RestMethod http://localhost:8083/actuator/health
+$demoApi = 'http://127.0.0.1:15679/api'
+$demoAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('ep2-demo:solo-demo-local'))
+$demoHeaders = @{Authorization = "Basic $demoAuth"}
+
+function Publish-DemoEmail($eventId, $type, $payload) {
+    $envelope = @{type=$type; eventId=$eventId; payload=$payload} | ConvertTo-Json -Depth 5 -Compress
+    $publication = @{
+        properties=@{delivery_mode=2; content_type='application/json'}
+        routing_key=$type
+        payload=$envelope
+        payload_encoding='string'
+    } | ConvertTo-Json -Depth 5 -Compress
+    Invoke-RestMethod -Method Post -Uri "$demoApi/exchanges/%2F/cmd.topic/publish" `
+      -Headers $demoHeaders -ContentType 'application/json; charset=utf-8' `
+      -Body ([Text.Encoding]::UTF8.GetBytes($publication))
+}
+
+$demoPayload = @{solicitanteEmail='vecino@example.com'; procedureLabel='Atención vecinal'}
+Publish-DemoEmail 'demo-admitted-1' 'email.admitted' $demoPayload
+Publish-DemoEmail 'demo-visit-1' 'email.visit' $demoPayload
+Publish-DemoEmail 'demo-resolved-1' 'email.resolved' $demoPayload
+# Publicar este duplicado cuando ya se haya registrado la primera simulación de visita.
+Publish-DemoEmail 'demo-visit-1' 'email.visit' $demoPayload
+Publish-DemoEmail 'demo-missing-recipient' 'email.admitted' @{}
+Publish-DemoEmail 'demo-unknown-type' 'email.unknown' $demoPayload
+
+Invoke-RestMethod -Headers $demoHeaders -Uri "$demoApi/queues/%2F/q.cmd.email" |
+  Select-Object name,messages_ready,messages_unacknowledged,message_stats
+Invoke-RestMethod -Headers $demoHeaders -Uri "$demoApi/queues/%2F/q.cmd.email.dlq" |
+  Select-Object name,messages_ready,consumers
+```
+
+Cada publicación debe devolver `routed: true`. Esperar al procesamiento y a la actualización de estadísticas: tres logs `email-simulado`, un INFO `duplicado` y dos ERROR `mensaje-muerto` con `intentos=0`. La cola principal debe quedar sin mensajes listos ni pendientes de ACK; las estadísticas de ACK deben reflejar también el duplicado. La DLQ debe contener dos mensajes y ningún consumidor. Puede inspeccionarse en Management, puerto 15679.
+
+Para comprobar posteriormente el agotamiento recuperable sin enviar correos reales: detener Notify, mantener el mismo broker dedicado y reiniciar con `EMAIL_MODE=smtp`, `EMAIL_FROM=avisos@example.com`, `SMTP_HOST=127.0.0.1`, `SMTP_PORT` apuntando a un puerto local confirmado sin servidor, y `SMTP_AUTH=false`. Publicar un nuevo `eventId`: tras los tres fallos debe aparecer `intentos=3` y un mensaje adicional en DLQ. No usar un servidor SMTP real para esta comprobación.
+
+Al terminar, detener Notify con Ctrl+C y ejecutar `docker stop bd-ep2-email-demo`. Al usar `--rm` y ningún volumen compartido, se descarta únicamente el broker dedicado. No borrar ni vaciar colas del clúster del proyecto.
 
 ## Arranque
 
