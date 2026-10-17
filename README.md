@@ -18,9 +18,9 @@ No es público. No pasa por el API Gateway ni por el BFF: solo habla con el brok
 
 Los contratos están en `barriodigital-infra/docs/decisiones.md`: mensajería (EP2-01), topología (EP2-02) y ACK, reintentos y DLQ (EP2-03).
 
-## Estado (EP2-16)
+## Estado (EP2-17)
 
-Conecta al broker y, al abrir la conexión, declara la topología del contrato EP2-02: 3 exchanges, 6 colas y 9 bindings. EP2-16 incorpora el listener de email, reutilizando sin cambios el ACK manual, los reintentos y la idempotencia de EP2-15. Cuadrillas (EP2-17) y certificados (EP2-18) siguen pendientes. La publicación desde requests corresponde a otras tareas; el consumidor puede validarse con mensajes sintéticos.
+Conecta al broker y, al abrir la conexión, declara la topología del contrato EP2-02: 3 exchanges, 6 colas y 9 bindings. EP2-16 incorpora el listener de email y EP2-17 el de cuadrillas; ambos reutilizan sin cambios el ACK manual, los reintentos y la idempotencia de EP2-15. Certificados (EP2-18) sigue pendiente. La publicación desde requests corresponde a otras tareas; los consumidores pueden validarse con mensajes sintéticos.
 
 El listener inicia la conexión al arrancar. Recibe el `Message` y el `Channel` y los entrega al procesador compartido antes de validar el tipo y el payload. No hay conversión automática de DTO previa al procesador.
 
@@ -105,6 +105,36 @@ Los secretos se suministran por entorno o `.env` local. `.gitignore` y `.dockeri
 Solo `ManualAckProcessor` reintenta: tres intentos totales con un segundo entre ellos. No hay retry adicional en el sender ni en Spring. El ACK ocurre después de que el sender termine; agotados los intentos se hace NACK sin requeue. RabbitMQ enruta el rechazo/NACK hacia `q.cmd.email.dlq`.
 
 SMTP aceptado no garantiza llegada a la bandeja del destinatario. Un fallo de transporte puede dejar incierto si el servidor aceptó el mensaje. Los reintentos y la deduplicación en memoria no garantizan exactamente un envío. La marca se guarda después del handler y antes de intentar el ACK; un fallo del ACK queda registrado. EP2-16 no incorpora recuperación durable ni otra política de idempotencia.
+
+## Cuadrillas: ticket en log (EP2-17)
+
+El listener de `consumer.crew` usa `barriodigital.rabbit.queue.crew` y acepta exclusivamente el `type` exacto `crew.ticket`. Según EP2-01, se origina al confirmar `EN_GESTION` → `EN_TERRENO`, junto con `email.visit`, con distinto `eventId`. La publicación usa `cmd.direct` y routing key `crew.ticket`; el binding alternativo `cmd.topic` / `crew.#` no amplía los tipos admitidos.
+
+`CrewConsumer` recibe `Message` y `Channel` y delega inmediatamente a `ManualAckProcessor`. El handler es `CrewTicketService`, que valida el payload, compone el record `CrewTicket` y registra el ticket. No convierte el body automáticamente a DTO antes del procesador ni consulta otros servicios o catálogos.
+
+| Campo del payload | Regla |
+|---|---|
+| `requestId`, `procedureType`, `address` | Obligatorios, textuales y con texto después de recortar espacios. Ausencia, null, vacío, solo blancos o cualquier tipo JSON no textual son errores no recuperables. No se convierten valores a texto ni se inventan datos. `correlationId` no sustituye `requestId`. |
+| `procedureLabel` | Opcional. Ausencia, null, vacío o blancos usan `procedureType` ya validado. Un valor no nulo debe ser textual y se recorta para presentarlo. |
+| `solicitanteEmail` | No se usa, valida ni registra. Su ausencia, null o contenido no condicionan el ticket. |
+
+La validación no modifica el `JsonNode` original. Sus errores identifican el campo y el problema sin volcar el payload. Se conservan las reglas del parser compartido: no se exige UUID.
+
+El número es `CREW-<eventId completo recibido del parser>`, sin recortar, truncar ni cambiar la capitalización del identificador. No genera UUID, contadores, fechas ni secuencias. El mismo evento conserva el número durante reintentos y reprocesamientos; eventos distintos generan números distintos aunque correspondan al mismo trámite. La unicidad depende del `eventId` suministrado por el productor.
+
+Cada procesamiento correcto registra un único INFO con prefijo `crew-ticket ` y un objeto JSON compacto, usando el `ObjectMapper` configurado por Spring. Ejemplo con datos ficticios:
+
+```text
+crew-ticket {"ticketNumber":"CREW-demo-crew-1","eventId":"demo-crew-1","requestId":"caso-demo-1","procedureType":"bache","procedureLabel":"Bache en calle","address":"Los Aromos 120"}
+```
+
+El JSON contiene exclusivamente esos seis campos. Conserva tildes y escapa comillas, barras inversas y caracteres de control; los saltos de línea de los datos quedan escapados dentro del JSON. No incluye correo ni sobre completo. Se mantiene el prefijo habitual de fecha, nivel y clase del logger y no cambia el formato global de logging ni el pretty printing del mapper para otros usos.
+
+El handler termina después de llamar al logger. La salida es exclusivamente el sistema de logging existente: no incorpora persistencia de tickets, archivos, PDF, API externa ni asignación efectiva a una cuadrilla. La llamada al logger no garantiza persistencia durable del log. Un fallo de composición o serialización se propaga con su causa, sin registrar un ticket parcial ni retornar éxito.
+
+Solo `ManualAckProcessor` decide ACK, rechazo y reintentos. Después del handler guarda la marca y hace ACK; un duplicado recibe ACK sin repetir el ticket. Tipo desconocido o validación inválida producen `NonRecoverableException`: rechazo sin requeue, sin reintentos, log `mensaje-muerto` con `intentos=0` y destino `q.cmd.crew.dlq`. Los fallos recuperables o inesperados siguen los tres intentos totales y NACK sin requeue al agotarlos. No hay retry adicional ni errores de red o disco específicos del servicio de tickets.
+
+La deduplicación por `cola|eventId` recuerda hasta 10 000 claves en memoria. La expulsión de claves, los reinicios y las múltiples instancias permiten repetir el log conservando el número del ticket. La comprobación y la marca no garantizan exclusión de duplicados concurrentes. Tampoco se deduplican eventos distintos por `requestId`: no es una garantía de exactamente una ejecución.
 
 ## Topología
 
@@ -197,6 +227,8 @@ Cada paquete tiene un `package-info.java` con su responsabilidad, porque Git no 
 
 Los tests no necesitan broker ni SMTP. Revisan topología, propiedades, política compartida, composición de los tres correos, validación, orden envío/ACK, duplicados y clasificación de fallos SMTP envueltos. Usan `Channel` y `JavaMailSender` simulados; el mensaje MIME sí se construye y serializa para comprobar UTF-8. `ApplicationContextRunner` comprueba selección y errores de configuración sin enviar. `src/test/resources/application.properties` apaga los health de RabbitMQ y correo, desactiva `spring.rabbitmq.listener.simple.auto-startup` y pone una password de prueba. Los listeners siguen activos en la configuración normal.
 
+EP2-17 añade validación, composición y serialización del ticket, preservación del payload, número estable y escape de caracteres. La composición del listener usa `ManualAckProcessor` real, `Channel` simulado y captura del log para comprobar registro antes del ACK y duplicados. Un auxiliar exclusivo de tests permite inyectar un `Sleeper` simulado sin ampliar la API de producción. Los fallos controlados del servicio verifican tres intentos y NACK sin esperas reales; no representan un fallo real del destino de logs.
+
 Se requiere Java 21. Si el wrapper falla en PowerShell con `No se puede indizar en una matriz nula` al consultar `Target[0]`, puede invocarse directamente la distribución Maven 3.9.6 ya instalada por el wrapper, sin modificarlo:
 
 ```powershell
@@ -206,9 +238,9 @@ $notifyMaven = Get-ChildItem "$env:USERPROFILE\.m2\wrapper\dists\apache-maven-3.
 & $notifyMaven.FullName -B clean verify
 ```
 
-## Validación posterior con broker local aislado
+## Validación manual de correos con broker local aislado
 
-Procedimiento manual pendiente de ejecutar; no forma parte de los tests automatizados. Usa un contenedor dedicado sin volúmenes compartidos, con puertos distintos a los del clúster del proyecto. Las credenciales siguientes son ficticias y exclusivas de esta demo local. No apuntar estos pasos a un broker compartido.
+Validación manual completada en local. Se conserva el procedimiento para repetirla; no forma parte de los tests automatizados. Usa un contenedor dedicado sin volúmenes compartidos, con puertos distintos a los del clúster del proyecto. Las credenciales siguientes son ficticias y exclusivas de esta demo local. No apuntar estos pasos a un broker compartido.
 
 En una primera consola:
 
@@ -268,9 +300,99 @@ Invoke-RestMethod -Headers $demoHeaders -Uri "$demoApi/queues/%2F/q.cmd.email.dl
 
 Cada publicación debe devolver `routed: true`. Esperar al procesamiento y a la actualización de estadísticas: tres logs `email-simulado`, un INFO `duplicado` y dos ERROR `mensaje-muerto` con `intentos=0`. La cola principal debe quedar sin mensajes listos ni pendientes de ACK; las estadísticas de ACK deben reflejar también el duplicado. La DLQ debe contener dos mensajes y ningún consumidor. Puede inspeccionarse en Management, puerto 15679.
 
-Para comprobar posteriormente el agotamiento recuperable sin enviar correos reales: detener Notify, mantener el mismo broker dedicado y reiniciar con `EMAIL_MODE=smtp`, `EMAIL_FROM=avisos@example.com`, `SMTP_HOST=127.0.0.1`, `SMTP_PORT` apuntando a un puerto local confirmado sin servidor, y `SMTP_AUTH=false`. Publicar un nuevo `eventId`: tras los tres fallos debe aparecer `intentos=3` y un mensaje adicional en DLQ. No usar un servidor SMTP real para esta comprobación.
+Para comprobar el agotamiento recuperable sin enviar correos reales: detener Notify, mantener el mismo broker dedicado y reiniciar con `EMAIL_MODE=smtp`, `EMAIL_FROM=avisos@example.com`, `SMTP_HOST=127.0.0.1`, `SMTP_PORT` apuntando a un puerto local confirmado sin servidor, y `SMTP_AUTH=false`. Publicar un nuevo `eventId`: tras los tres fallos debe aparecer `intentos=3` y un mensaje adicional en DLQ. No usar un servidor SMTP real para esta comprobación.
 
 Al terminar, detener Notify con Ctrl+C y ejecutar `docker stop bd-ep2-email-demo`. Al usar `--rm` y ningún volumen compartido, se descarta únicamente el broker dedicado. No borrar ni vaciar colas del clúster del proyecto.
+
+## Validación manual de cuadrillas con broker local aislado
+
+Validación manual completada en local. Se conserva el procedimiento para repetirla; no forma parte de los tests automatizados. Usa un broker dedicado, sin volúmenes compartidos y con puertos distintos del clúster y de la demo de emails. Las credenciales son ficticias y exclusivas de esta prueba. Usar consolas PowerShell dedicadas; no apuntar a un broker compartido.
+
+En la primera consola:
+
+```powershell
+docker run --rm -d --name bd-ep2-crew-demo `
+  -p 127.0.0.1:5680:5672 -p 127.0.0.1:15680:15672 `
+  -e RABBITMQ_DEFAULT_USER=ep2-crew-demo -e RABBITMQ_DEFAULT_PASS=solo-demo-local `
+  rabbitmq:3.12-management-alpine
+docker exec bd-ep2-crew-demo rabbitmq-diagnostics -q ping
+```
+
+```powershell
+$env:JAVA_HOME = 'C:\Program Files\Java\jdk-21'
+$env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
+$env:RABBIT_ADDRESSES = 'localhost:5680'
+$env:RABBIT_USER = 'ep2-crew-demo'
+$env:RABBIT_PASSWORD = 'solo-demo-local'
+$env:EMAIL_MODE = 'logging'
+$env:SERVER_PORT = '8083'
+.\mvnw.cmd spring-boot:run
+```
+
+Si reproduce el fallo del wrapper descrito antes, usar su distribución instalada con el objetivo `spring-boot:run`. En una segunda consola, comprobar health y preparar la publicación. La routing key queda fija en `crew.ticket`, incluso para probar un `type` desconocido:
+
+```powershell
+Invoke-RestMethod http://localhost:8083/actuator/health
+$crewApi = 'http://127.0.0.1:15680/api'
+$crewAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('ep2-crew-demo:solo-demo-local'))
+$crewHeaders = @{Authorization = "Basic $crewAuth"}
+
+function Publish-DemoCrew($eventId, $type, $payload) {
+    $envelope = @{type=$type; eventId=$eventId; payload=$payload} | ConvertTo-Json -Depth 5 -Compress
+    $publication = @{
+        properties=@{delivery_mode=2; content_type='application/json'}
+        routing_key='crew.ticket'
+        payload=$envelope
+        payload_encoding='string'
+    } | ConvertTo-Json -Depth 5 -Compress
+    Invoke-RestMethod -Method Post -Uri "$crewApi/exchanges/%2F/cmd.direct/publish" `
+      -Headers $crewHeaders -ContentType 'application/json; charset=utf-8' `
+      -Body ([Text.Encoding]::UTF8.GetBytes($publication))
+}
+
+$crewPayload = @{
+    requestId='caso-demo-1'; procedureType='bache'
+    procedureLabel='Bache en calle'; address='Los Aromos 120'
+}
+Publish-DemoCrew 'demo-crew-1' 'crew.ticket' $crewPayload
+```
+
+Cada publicación debe responder `routed: true`: confirma enrutamiento, no procesamiento. Esperar a observar el primer INFO `crew-ticket` con número `CREW-demo-crew-1` antes de publicar el duplicado y los casos inválidos:
+
+```powershell
+Publish-DemoCrew 'demo-crew-1' 'crew.ticket' $crewPayload
+
+$missingAddress = $crewPayload.Clone()
+$missingAddress.Remove('address')
+Publish-DemoCrew 'demo-crew-sin-address' 'crew.ticket' $missingAddress
+
+$invalidRequest = $crewPayload.Clone()
+$invalidRequest.requestId = 123
+Publish-DemoCrew 'demo-crew-request-invalido' 'crew.ticket' $invalidRequest
+
+$invalidType = $crewPayload.Clone()
+$invalidType.procedureType = '   '
+Publish-DemoCrew 'demo-crew-tipo-vacio' 'crew.ticket' $invalidType
+
+$invalidLabel = $crewPayload.Clone()
+$invalidLabel.procedureLabel = @{nombre='etiqueta incorrecta'}
+Publish-DemoCrew 'demo-crew-label-invalida' 'crew.ticket' $invalidLabel
+
+Publish-DemoCrew 'demo-crew-type-desconocido' 'crew.unknown' $crewPayload
+
+Invoke-RestMethod -Headers $crewHeaders -Uri "$crewApi/queues/%2F/q.cmd.crew" |
+  Select-Object name,messages_ready,messages_unacknowledged,message_stats
+Invoke-RestMethod -Headers $crewHeaders -Uri "$crewApi/queues/%2F/q.cmd.crew.dlq" |
+  Select-Object name,messages_ready,consumers
+```
+
+Los casos independientes necesitan `eventId` diferentes; reutilizar uno ya procesado puede activar la deduplicación antes de validar el contenido. Para repetir casos en la misma instancia, usar identificadores nuevos salvo en la comprobación intencional del duplicado.
+
+Esperar al procesamiento y a la actualización de estadísticas. Resultado esperado: un INFO `crew-ticket`, un INFO `duplicado cola=q.cmd.crew` y cinco ERROR `mensaje-muerto` con `intentos=0`. La cola principal queda sin mensajes listos ni pendientes de ACK, con dos ACK por el válido y su duplicado. La DLQ contiene cinco mensajes y ningún consumidor; puede inspeccionarse en Management, puerto 15680.
+
+El agotamiento de reintentos se verifica mediante el fallo controlado de las pruebas automatizadas. Detener RabbitMQ no demuestra un fallo recuperable del servicio de tickets. No se añaden interruptores ni mecanismos de fallo en producción.
+
+Al terminar, detener únicamente la instancia Notify iniciada aquí con Ctrl+C en su consola y ejecutar `docker stop bd-ep2-crew-demo`. El contenedor usa `--rm` y ningún volumen compartido. Cerrar las consolas dedicadas para descartar sus variables de entorno. No borrar ni vaciar colas del clúster del proyecto ni detener otros recursos.
 
 ## Arranque
 

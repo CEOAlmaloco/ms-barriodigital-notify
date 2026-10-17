@@ -12,6 +12,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,7 +25,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Sin broker: el contexto levanta y el health responde UP porque src/test/resources apaga el indicador de RabbitMQ.
  * Fuera de los tests el indicador está activo y sin broker el health queda DOWN.
  */
-@SpringBootTest(properties = "barriodigital.rabbit.queue.email=q.test.email.configurada")
+@SpringBootTest(properties = {
+        "barriodigital.rabbit.queue.email=q.test.email.configurada",
+        "barriodigital.rabbit.queue.crew=q.test.crew.configurada"
+})
 @AutoConfigureMockMvc
 class NotifyApplicationTest {
 
@@ -58,9 +63,10 @@ class NotifyApplicationTest {
     @Test
     void listenerUsaLaColaConfiguradaYNoArrancaSinBrokerEnPruebas() {
         var containers = context.getBean(RabbitListenerEndpointRegistry.class).getListenerContainers();
-        assertThat(containers).hasSize(1);
-        var listener = (AbstractMessageListenerContainer) containers.iterator().next();
-        assertThat(listener.getQueueNames()).containsExactly("q.test.email.configurada");
-        assertThat(listener.isRunning()).isFalse();
+        assertThat(containers).hasSize(2);
+        assertThat(containers).allSatisfy(container -> assertThat(container.isRunning()).isFalse());
+        assertThat(containers).flatExtracting(container ->
+                List.of(((AbstractMessageListenerContainer) container).getQueueNames()))
+                .containsExactlyInAnyOrder("q.test.email.configurada", "q.test.crew.configurada");
     }
 }
