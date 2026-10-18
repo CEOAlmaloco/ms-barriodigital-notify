@@ -18,13 +18,13 @@ No es público. No pasa por el API Gateway ni por el BFF: solo habla con el brok
 
 Los contratos están en `barriodigital-infra/docs/decisiones.md`: mensajería (EP2-01), topología (EP2-02) y ACK, reintentos y DLQ (EP2-03).
 
-## Estado (EP2-17)
+## Estado (EP2-18)
 
-Conecta al broker y, al abrir la conexión, declara la topología del contrato EP2-02: 3 exchanges, 6 colas y 9 bindings. EP2-16 incorpora el listener de email y EP2-17 el de cuadrillas; ambos reutilizan sin cambios el ACK manual, los reintentos y la idempotencia de EP2-15. Certificados (EP2-18) sigue pendiente. La publicación desde requests corresponde a otras tareas; los consumidores pueden validarse con mensajes sintéticos.
+Conecta al broker y configura la declaración de la topología EP2-02: 3 exchanges, 6 colas y 9 bindings. EP2-16 incorpora email, EP2-17 cuadrillas y EP2-18 certificados PDF. Los tres reutilizan sin cambios el ACK manual, reintentos e idempotencia de EP2-15. La publicación desde Requests corresponde a otras tareas; los consumidores pueden validarse con mensajes sintéticos.
 
 El listener inicia la conexión al arrancar. Recibe el `Message` y el `Channel` y los entrega al procesador compartido antes de validar el tipo y el payload. No hay conversión automática de DTO previa al procesador.
 
-El health de RabbitMQ está activo. `/actuator/health` en `UP` significa que notify se conectó al broker, y la topología se declara en esa misma conexión. Sin broker responde `DOWN`. El indicador de correo está desactivado: el health no abre una conexión SMTP y no acredita entrega de correos.
+El health de RabbitMQ está activo. `/actuator/health` en `UP` acredita una conexión al broker; no comprueba exchanges, colas ni bindings, aunque su declaración automática se configura al abrir la conexión. La topología debe verificarse aparte. Sin broker responde `DOWN`. El indicador de correo está desactivado: el health no abre SMTP ni acredita entrega o escritura del volumen.
 
 ## Variables
 
@@ -135,6 +135,74 @@ El handler termina después de llamar al logger. La salida es exclusivamente el 
 Solo `ManualAckProcessor` decide ACK, rechazo y reintentos. Después del handler guarda la marca y hace ACK; un duplicado recibe ACK sin repetir el ticket. Tipo desconocido o validación inválida producen `NonRecoverableException`: rechazo sin requeue, sin reintentos, log `mensaje-muerto` con `intentos=0` y destino `q.cmd.crew.dlq`. Los fallos recuperables o inesperados siguen los tres intentos totales y NACK sin requeue al agotarlos. No hay retry adicional ni errores de red o disco específicos del servicio de tickets.
 
 La deduplicación por `cola|eventId` recuerda hasta 10 000 claves en memoria. La expulsión de claves, los reinicios y las múltiples instancias permiten repetir el log conservando el número del ticket. La comprobación y la marca no garantizan exclusión de duplicados concurrentes. Tampoco se deduplican eventos distintos por `requestId`: no es una garantía de exactamente una ejecución.
+
+## Certificados PDF (EP2-18)
+
+`CertificateConsumer` recibe `Message` y `Channel` y delega inmediatamente a `ManualAckProcessor`, usando `barriodigital.rabbit.queue.certificate`. Solo acepta `certificate.receipt` y `certificate.resolved`; `certificate.gen` es una routing key alternativa, no un tipo admitido. `CertificateService` valida y coordina; `CertificateDocument` conserva datos inmutables; `CertificatePdfGenerator` compone y `CertificateFileStore` publica el archivo. No consulta otros servicios.
+
+| Campo | Regla |
+|---|---|
+| `requestId`, `procedureType` | Obligatorios, textuales y con contenido tras recortar espacios. No se sustituye el identificador por `correlationId`. |
+| `procedureLabel` | Opcional; ausente, null o blanco usa `procedureType`. |
+| `address` | Opcional; ausente, null o blanco se omite. |
+| `solicitanteEmail` | No se utiliza, valida ni muestra. |
+
+Un valor no nulo y no textual en los campos utilizados se rechaza, sin convertir objetos o números a texto. Se conserva el payload original y no se exige UUID adicionalmente al parser común. Tipos desconocidos, datos inválidos y caracteres no representables producen `NonRecoverableException`, rechazo sin requeue ni reintentos y destino DLQ.
+
+| Tipo | Título | Texto principal |
+|---|---|---|
+| `certificate.receipt` | Comprobante de ingreso | Tu trámite fue registrado en BarrioDigital con estado INGRESADO. |
+| `certificate.resolved` | Certificado de resolución | Tu trámite fue marcado como RESUELTO en BarrioDigital. |
+
+El cuerpo muestra identificador completo, etiqueta o código, dirección si existe y «Estado correspondiente al evento». No es una consulta del estado actual. Los metadatos incluyen `eventId` completo, «Publicación del evento» cuando hay `timestamp` y «Generación del documento» desde un `Clock` UTC inyectable. Formato `dd/MM/uuuu HH:mm:ss UTC`. El timestamp no es fecha de ingreso ni resolución. No se inventan nombres, trabajos realizados, visitas, datos municipales o folios. No hay firmas, sellos, QR, validez oficial, descarga HTTP ni adjuntos de email.
+
+PDFBox **3.0.8**, versión estable publicada por Apache y compatible con Java 21 (mínimo Java 8), se fija en el POM: https://pdfbox.apache.org/download.html. Se usa `spring-jcl` existente en lugar de incorporar otra implementación de Commons Logging. Inter 4.1 estática regular y seminegrita procede del ZIP oficial, sin modificaciones; licencia OFL 1.1, copyright, URLs y hashes están en `src/main/resources/fonts/inter/README.md` y `LICENSE.txt`. Las fuentes se cargan del JAR y se incrustan como subconjuntos. No depende de fuentes del sistema ni de la red. Sus recursos se comprueban al iniciar; ausentes o corruptos son un defecto de configuración.
+
+Diseño basado en los tokens y marca textual del frontend: A4 vertical, márgenes de 20 mm, título 24 pt, cuerpo 11 pt, morado `#814B8B`, texto `#252329`, secundario `#68636B`, separadores `#DDD9DF` y fondo blanco. Ajusta según las métricas de Inter y divide palabras e identificadores extensos sin truncarlos. Admite varias páginas, evita etiquetas aisladas, repite cabecera compacta y reserva pie para numeración. Saltos de línea son disposición; tabulaciones ocupan cuatro espacios. No se eliminan caracteres visibles. Un glifo ausente identifica campo y código Unicode en el error, sin volcar datos personales.
+
+### Salida y límites
+
+`barriodigital.certificate.output-dir` usa `CERTIFICATE_OUTPUT_DIR`, con `./data/certificates` por defecto. No admite configuración vacía. Crea el directorio al guardar si falta. En los dos Compose existentes de Apps se fija `/app/data/certificates`, montado en el volumen nombrado `certificates`. No se publica el puerto 8083 al host.
+
+```text
+certificate-receipt-<sha256-eventId>.pdf
+certificate-resolved-<sha256-eventId>.pdf
+```
+
+SHA-256 se calcula sobre el eventId completo UTF-8, sin normalizarlo, recortarlo o cambiar mayúsculas. Los nombres son controlados, no se usan datos recibidos como segmentos de ruta. Se rechazan enlaces simbólicos o redirecciones en el directorio y destino. El directorio y sus ancestros deben permanecer bajo administración del servicio; no se promete exclusión frente a cambios hostiles concurrentes del sistema de archivos.
+
+Se escribe un temporal exclusivo `.certificate-*.part` en el mismo directorio y se cierra el PDF antes de publicarlo mediante movimiento atómico. Si existe, se regenera y reemplaza la misma ruta, sin eliminar antes el anterior. Si el proveedor no admite la operación requerida se falla; no hay fallback a copia ni escritura directa del final. Java deja el reemplazo con `ATOMIC_MOVE` sujeto al proveedor: debe comprobarse sobre el montaje real.
+
+Fallos de creación, escritura y publicación son `RecoverableException` con causa original. Se conserva el archivo previo y se intenta limpiar el temporal; un fallo de limpieza queda suprimido en la causa, sin ocultarla. Las excepciones inesperadas conservan los reintentos comunes. Tras guardar se registra un INFO `certificate-pdf` con JSON compacto de `type`, `eventId` y `fileName`, escapando valores y sin payload. Solo después termina el handler, se marca el evento y se hace ACK.
+
+Reprocesar después de reiniciar puede regenerar la misma ruta y cambiar la fecha. La deduplicación sigue en memoria, sin garantía de exactamente una ejecución ni exclusión entre instancias. Atomicidad de publicación evita finales parciales, no garantiza durabilidad absoluta ante pérdida de energía. Una caída abrupta puede dejar temporales: no se hace limpieza indiscriminada. PDF, muestras y capturas locales quedan fuera de Git y del contexto Docker.
+
+### Pruebas y revisión visual
+
+La suite usa `@TempDir`, canal y espera simulados, procesador real, reloj fijo, PDFBox para lectura y fallos controlados. Comprueba contenido, UTF-8, fuentes incrustadas, paginación, nombres seguros, reemplazo, preservación ante fallos, limpieza y ACK posterior al archivo legible. El contexto tiene tres listeners detenidos sin broker. Los enlaces simbólicos reales se prueban en Linux.
+
+Para producir seis ejemplos ficticios y PNG de **todas** sus páginas, exclusivamente mediante código de pruebas:
+
+```powershell
+.\mvnw.cmd -B '-Dcertificate.review-dir=.local/ep2-18/samples' '-Dtest=CertificateReviewSamplesTest' test
+```
+
+Usar Java 21 y la distribución Maven existente descrita abajo si falla el wrapper. Las muestras incluyen ambos tipos, ausencia de dirección/timestamp, tildes y puntuación, identificador sin espacios y varias páginas. Abrir todos los PNG y revisar márgenes, glifos, desbordes, cortes, cabeceras y pies frente a los tokens del frontend. Extraer texto no reemplaza esa revisión. El parámetro solo existe en tests, no como interruptor de producción.
+
+La validación real de broker, volumen y recreación usa los Compose de `barriodigital-infra/apps`; procedimiento en su README. En local MQ inicia primero y Notify comparte su red; en EC2 se requiere endpoint privado del nodo 1. No se añade dependencia de Requests hasta implementar su publicador y la garantía de topología. Servicio, variables, redes, healthcheck y volumen quedan adelantados respecto de EP2-28.
+
+### Resultados locales del 17/10/2026
+
+Con Java 21 y la distribución Maven 3.9.6 existente se ejecutó `clean verify` con `-Dcertificate.review-dir=.local/ep2-18/samples` y `-Dcertificate.container-dir=../barriodigital-infra/.local/ep2-18/container-pdfs`: 247 casos, sin fallos ni errores; uno omitido por ser exclusivo de Linux. Las muestras se generaron, renderizaron e inspeccionaron: seis PDF y sus nueve páginas, incluyendo ambas variantes, opcionales ausentes, puntuación y textos extensos. Se revisaron márgenes, legibilidad, cabeceras, pies y continuidad frente al frontend.
+
+La suite también se ejecutó en Linux/Java 21 usando la etapa build del Dockerfile: 247 casos, sin fallos ni errores; se omitieron únicamente las dos verificaciones optativas de muestras/copia del contenedor. La prueba real de enlaces simbólicos sí se ejecutó. Para repetir:
+
+```powershell
+docker build --target build -t bd-notify-ep218-check .
+docker run --rm --name bd-notify-ep218-check bd-notify-ep218-check mvn -B test
+```
+
+Se construyó la imagen final y se generaron los dos PDF desde su JAR con recursos empaquetados. La lectura de sus copias comprobó texto español y fuentes Inter incrustadas. La validación Compose confirmó topología, ACK después del guardado, duplicado, DLQ, UID 0 y persistencia con hashes idénticos tras recrear Notify antes de reenviar. El reenvío reemplazó un único PDF en la misma ruta, sin temporales restantes. Evidencias de Maven, muestras y capturas en `.local/ep2-18`; evidencias de Docker y hashes en la carpeta homónima de Infra. La revisión EC2 fue solo estática; no se comprobó conectividad remota ni se desplegó. No se enviaron correos reales.
 
 ## Topología
 
@@ -444,7 +512,7 @@ docker run --rm -p 8083:8083 `
 
 `GET http://localhost:8083/actuator/health` responde `{"status":"UP"}` cuando conectó al broker.
 
-`host.docker.internal` aplica a Docker Desktop y solo alcanza el nodo 1, que es el único que publica el `5672` en el host. En compose se usarán los dos nodos con EP2-28.
+`host.docker.internal` corresponde al ejemplo standalone de Docker Desktop y no es la configuración EC2. EP2-18 incorpora Notify a ambos Compose existentes: local usa la red MQ y nombres de sus dos nodos; EC2 usa el endpoint privado del nodo 1. Ver `barriodigital-infra/apps/README.md`.
 
 ## Git
 

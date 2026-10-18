@@ -1,4 +1,6 @@
 target/
+data/certificates/
+.local/
 .env
 .env.*
 !.env.example

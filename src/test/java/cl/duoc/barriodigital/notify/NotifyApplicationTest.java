@@ -27,7 +27,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(properties = {
         "barriodigital.rabbit.queue.email=q.test.email.configurada",
-        "barriodigital.rabbit.queue.crew=q.test.crew.configurada"
+        "barriodigital.rabbit.queue.crew=q.test.crew.configurada",
+        "barriodigital.rabbit.queue.certificate=q.test.certificate.configurada"
 })
 @AutoConfigureMockMvc
 class NotifyApplicationTest {
@@ -63,10 +64,10 @@ class NotifyApplicationTest {
     @Test
     void listenerUsaLaColaConfiguradaYNoArrancaSinBrokerEnPruebas() {
         var containers = context.getBean(RabbitListenerEndpointRegistry.class).getListenerContainers();
-        assertThat(containers).hasSize(2);
+        assertThat(containers).hasSize(3);
         assertThat(containers).allSatisfy(container -> assertThat(container.isRunning()).isFalse());
         assertThat(containers).flatExtracting(container ->
                 List.of(((AbstractMessageListenerContainer) container).getQueueNames()))
-                .containsExactlyInAnyOrder("q.test.email.configurada", "q.test.crew.configurada");
+                .containsExactlyInAnyOrder("q.test.email.configurada", "q.test.crew.configurada", "q.test.certificate.configurada");
     }
 }
