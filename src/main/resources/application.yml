@@ -36,6 +36,8 @@ spring:
 
 # Contrato EP2-02 (docs/decisiones.md en barriodigital-infra). Mismas claves en requests y mq-admin.
 barriodigital:
+  certificate:
+    output-dir: ${CERTIFICATE_OUTPUT_DIR:./data/certificates}
   email:
     mode: ${EMAIL_MODE:logging}
     from: ${EMAIL_FROM:}
