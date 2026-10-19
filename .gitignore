@@ -1,5 +1,6 @@
 # === Build Maven ===
 target/
+node_modules/
 data/certificates/
 .local/
 !.mvn/wrapper/maven-wrapper.jar
