@@ -1,0 +1,78 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: ms-barriodigital-notify
+  config:
+    import: optional:file:.env[.properties]
+  mail:
+    host: ${SMTP_HOST:}
+    port: ${SMTP_PORT:25}
+    username: ${SMTP_USER:}
+    password: ${SMTP_PASSWORD:}
+    protocol: smtp
+    default-encoding: UTF-8
+    test-connection: false
+    properties:
+      "[mail.smtp.auth]": ${SMTP_AUTH:false}
+      "[mail.smtp.starttls.enable]": ${SMTP_STARTTLS_ENABLE:false}
+      "[mail.smtp.starttls.required]": ${SMTP_STARTTLS_REQUIRED:false}
+      "[mail.smtp.connectiontimeout]": ${SMTP_CONNECTION_TIMEOUT:5000}
+      "[mail.smtp.timeout]": ${SMTP_READ_TIMEOUT:5000}
+      "[mail.smtp.writetimeout]": ${SMTP_WRITE_TIMEOUT:5000}
+  rabbitmq:
+    addresses: ${RABBIT_ADDRESSES:localhost:5672}
+    username: ${RABBIT_USER:barriodigital}
+    password: ${RABBIT_PASSWORD}
+    # Milisegundos. Contrato EP2-02.
+    connection-timeout: 2000
+    # Contrato EP2-03: el listener confirma a mano y nada vuelve solo a la cola. Prefetch 10.
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 10
+        default-requeue-rejected: false
+
+# Contrato EP2-02 (docs/decisiones.md en barriodigital-infra). Mismas claves en requests y mq-admin.
+barriodigital:
+  certificate:
+    output-dir: ${CERTIFICATE_OUTPUT_DIR:./data/certificates}
+  email:
+    mode: ${EMAIL_MODE:logging}
+    from: ${EMAIL_FROM:}
+  rabbit:
+    exchange:
+      topic: cmd.topic
+      direct: cmd.direct
+      dead: cmd.dead.dlx
+    queue:
+      email: q.cmd.email
+      email-dlq: q.cmd.email.dlq
+      crew: q.cmd.crew
+      crew-dlq: q.cmd.crew.dlq
+      certificate: q.cmd.certificate
+      certificate-dlq: q.cmd.certificate.dlq
+    routing:
+      email-send: email.send
+      email-topic: "email.*"
+      crew-ticket: crew.ticket
+      crew-topic: "crew.#"
+      certificate-gen: certificate.gen
+      certificate-topic: "certificate.*"
+      email-dead: email.dead
+      crew-dead: crew.dead
+      certificate-dead: certificate.dead
+
+management:
+  # El health comprueba RabbitMQ, no abre conexiones SMTP (tampoco en modo logging).
+  health:
+    mail:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized

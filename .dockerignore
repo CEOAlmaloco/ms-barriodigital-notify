@@ -1,0 +1,10 @@
+target/
+data/certificates/
+.local/
+.env
+.env.*
+!.env.example
+*.p12
+*.jks
+*.pem
+*.key
