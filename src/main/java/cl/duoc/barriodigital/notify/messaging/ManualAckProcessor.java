@@ -8,9 +8,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * ACK manual común a los tres consumidores (contrato EP2-03). El listener le pasa su cola, el mensaje,
- * el canal y su handler; aquí se decide basicAck, basicNack o basicReject.
- * Los reintentos ocurren en el mismo hilo, sin devolver el mensaje al broker entre intentos.
+ * ACK manual común a los tres consumidores.
+ * En el mismo hilo decide basicAck si hubo éxito, basicNack con requeue=false si el fallo recuperable se agotó, y basicReject con requeue=false si no es recuperable.
  */
 @Component
 public class ManualAckProcessor {
@@ -23,17 +22,23 @@ public class ManualAckProcessor {
     private final ProcessedEvents processedEvents;
     private final Sleeper sleeper;
 
+    /** Constructor de producción. La espera entre los 3 intentos duerme el mismo hilo. */
     @Autowired
     public ManualAckProcessor(EnvelopeParser parser, ProcessedEvents processedEvents) {
         this(parser, processedEvents, Sleeper.THREAD);
     }
 
+    /** Constructor que permite cambiar la espera. Los tests pasan una que no duerme. */
     ManualAckProcessor(EnvelopeParser parser, ProcessedEvents processedEvents, Sleeper sleeper) {
         this.parser = parser;
         this.processedEvents = processedEvents;
         this.sleeper = sleeper;
     }
 
+    /**
+     * Decide el ACK en el mismo hilo, con hasta 3 intentos.
+     * El éxito o un duplicado hace basicAck; lo no recuperable hace basicReject con requeue=false; el recuperable agotado hace basicNack con requeue=false y escribe el log mensaje-muerto.
+     */
     public void process(String queue, Message message, Channel channel, EnvelopeHandler handler) {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
 
@@ -82,7 +87,7 @@ public class ManualAckProcessor {
         nack(queue, eventId, reason(lastFailure), AckPolicy.MAX_ATTEMPTS, channel, deliveryTag);
     }
 
-    /** Mensaje de la excepción; si no es una de las dos del contrato, antepone su clase. */
+    /** Mensaje de la excepción. Si no es RecoverableException ni NonRecoverableException, antepone el nombre de la clase. */
     private static String reason(Exception e) {
         String name = e.getClass().getSimpleName();
         if (e.getMessage() == null) {
@@ -92,6 +97,7 @@ public class ManualAckProcessor {
         return known ? e.getMessage() : name + ": " + e.getMessage();
     }
 
+    /** Éxito: basicAck para que RabbitMQ saque el mensaje de la cola. */
     private void ack(String queue, String eventId, Channel channel, long deliveryTag) {
         try {
             channel.basicAck(deliveryTag, false);
@@ -100,7 +106,7 @@ public class ManualAckProcessor {
         }
     }
 
-    /** Recuperable agotado: RabbitMQ lo manda a la DLQ por el dead-letter de la cola. */
+    /** Recuperable agotado: basicNack con requeue=false. La cola lo manda a la DLQ, que no tiene consumidor. */
     private void nack(String queue, String eventId, String reason, int attempts, Channel channel, long deliveryTag) {
         logDead(queue, eventId, reason, attempts);
         try {
@@ -110,7 +116,7 @@ public class ManualAckProcessor {
         }
     }
 
-    /** No recuperable: a la DLQ sin reintentos. */
+    /** No recuperable: basicReject con requeue=false, sin reintentos. La cola lo manda a la DLQ. */
     private void reject(String queue, String eventId, String reason, int attempts, Channel channel, long deliveryTag) {
         logDead(queue, eventId, reason, attempts);
         try {
@@ -120,6 +126,7 @@ public class ManualAckProcessor {
         }
     }
 
+    /** Escribe el log mensaje-muerto con cola, eventId, motivo e intentos. */
     private static void logDead(String queue, String eventId, String reason, int attempts) {
         log.error("mensaje-muerto cola={} eventId={} motivo=\"{}\" intentos={}", queue, eventId, reason, attempts);
     }

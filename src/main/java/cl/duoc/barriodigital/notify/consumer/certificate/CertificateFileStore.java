@@ -17,16 +17,25 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
+/**
+ * Guarda el PDF en una carpeta.
+ * Primero lo escribe en un archivo temporal y, cuando está listo, lo mueve al nombre final. Si el disco falla, borra el temporal y avisa que se puede reintentar.
+ */
 @Component
 public class CertificateFileStore {
     private final Path directory;
     private final CertificatePdfGenerator generator;
 
+    /** Fija la carpeta absoluta y quién dibuja el PDF. */
     public CertificateFileStore(CertificateProperties properties, CertificatePdfGenerator generator) {
         this.directory = Path.of(properties.outputDir()).toAbsolutePath().normalize();
         this.generator = generator;
     }
 
+    /**
+     * Escribe primero un archivo temporal y después lo mueve al nombre final.
+     * Si el disco falla, borra el temporal y avisa que se puede reintentar.
+     */
     public Path save(CertificateDocument document) {
         Path temporary = null;
         try {
@@ -58,6 +67,10 @@ public class CertificateFileStore {
         }
     }
 
+    /**
+     * Arma el nombre certificate-receipt- o certificate-resolved- más el SHA-256 del eventId.
+     * Así el eventId no puede salirse de la carpeta.
+     */
     static String fileName(CertificateDocument document) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
@@ -68,6 +81,7 @@ public class CertificateFileStore {
         }
     }
 
+    /** Crea la carpeta parte por parte y rechaza enlaces simbólicos o archivos en el camino. */
     private void ensureDirectory() throws IOException {
         Path current = directory.getRoot();
         for (Path part : directory) {
@@ -85,6 +99,7 @@ public class CertificateFileStore {
         }
     }
 
+    /** Comprueba que el destino esté dentro de la carpeta y no sea un enlace. */
     private void checkTarget(Path target) throws IOException {
         if (!target.normalize().getParent().equals(directory)
                 || Files.isSymbolicLink(target)
@@ -94,7 +109,7 @@ public class CertificateFileStore {
         }
     }
 
-    /** ATOMIC_MOVE no ofrece reemplazo uniforme entre proveedores: si falla no se degrada a copia. */
+    /** Mueve el temporal al nombre final de una sola vez. Si falla, no hace una copia de reemplazo. */
     void publish(Path temporary, Path target) throws IOException {
         Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     }

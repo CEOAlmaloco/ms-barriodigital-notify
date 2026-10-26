@@ -10,6 +10,10 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.stereotype.Component;
 
+/**
+ * Escucha la cola de los correos.
+ * No confirma el mensaje: se lo pasa a ManualAckProcessor, que decide basicAck, reintento o descarte.
+ */
 @Component
 public class EmailConsumer {
 
@@ -17,17 +21,23 @@ public class EmailConsumer {
     private final RabbitNamesProperties names;
     private final EmailSender sender;
 
+    /** Recibe el procesador común, los nombres de las colas y quién manda el correo. */
     public EmailConsumer(ManualAckProcessor processor, RabbitNamesProperties names, EmailSender sender) {
         this.processor = processor;
         this.names = names;
         this.sender = sender;
     }
 
+    /** RabbitMQ llama esto por cada mensaje de q.cmd.email y entrega el trabajo a process. */
     @RabbitListener(queues = "${barriodigital.rabbit.queue.email}")
     public void consume(Message message, Channel channel) {
         processor.process(names.queue().email(), message, channel, this::handle);
     }
 
+    /**
+     * Arma el correo según el tipo.
+     * email.admitted, email.visit y email.resolved tienen asunto y frase propios. Otro tipo, o un correo inválido, no se reintenta.
+     */
     private void handle(MessageEnvelope envelope) {
         String subject;
         String main;
@@ -68,6 +78,10 @@ public class EmailConsumer {
         sender.send(new EmailMessage(envelope.type(), recipient.textValue().trim(), subject, body.toString()));
     }
 
+    /**
+     * Lee un campo de texto opcional.
+     * Si no viene, devuelve vacío. Si viene y no es texto, el mensaje no se puede reintentar.
+     */
     private static String optionalText(JsonNode payload, String field) {
         JsonNode node = payload.get(field);
         if (node == null || node.isNull()) {

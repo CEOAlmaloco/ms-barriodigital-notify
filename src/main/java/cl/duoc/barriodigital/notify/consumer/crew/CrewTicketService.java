@@ -10,6 +10,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+/**
+ * Arma el ticket de la cuadrilla y lo deja en el log.
+ * No llama a una persona: registra el número, el trámite, el tipo y la dirección.
+ */
 @Service
 public class CrewTicketService {
 
@@ -17,10 +21,15 @@ public class CrewTicketService {
 
     private final ObjectMapper objectMapper;
 
+    /** Recibe el conversor que deja el ticket en una sola línea JSON. */
     public CrewTicketService(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * Solo acepta crew.ticket y exige requestId, procedureType y address; si la etiqueta viene vacía, usa el tipo.
+     * El número del ticket es CREW- más el eventId.
+     */
     public void handle(MessageEnvelope envelope) throws JsonProcessingException {
         if (!"crew.ticket".equals(envelope.type())) {
             throw new NonRecoverableException("tipo de cuadrilla desconocido");
@@ -41,6 +50,7 @@ public class CrewTicketService {
         log.info("crew-ticket {}", json);
     }
 
+    /** Lee un texto obligatorio. Si falta o está en blanco, el mensaje no se reintenta. */
     private static String requiredText(JsonNode payload, String field) {
         String value = optionalText(payload, field);
         if (value.isBlank()) {
@@ -49,6 +59,7 @@ public class CrewTicketService {
         return value;
     }
 
+    /** Lee un texto opcional. Si no viene, devuelve vacío. Si no es texto, no se reintenta. */
     private static String optionalText(JsonNode payload, String field) {
         JsonNode node = payload.get(field);
         if (node == null || node.isNull()) {

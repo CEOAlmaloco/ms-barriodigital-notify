@@ -21,17 +21,22 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Set;
 
-/** Un envío por invocación. ManualAckProcessor es el único responsable de los reintentos. */
+/**
+ * Envía el correo de verdad por SMTP, una vez por llamada.
+ * Un rechazo temporal se puede reintentar; una dirección inexistente o una clave incorrecta no. Los reintentos los hace solo ManualAckProcessor.
+ */
 public class SmtpEmailSender implements EmailSender {
 
     private final JavaMailSender sender;
     private final String from;
 
+    /** Guarda el cliente SMTP y la dirección del remitente. */
     public SmtpEmailSender(JavaMailSender sender, String from) {
         this.sender = sender;
         this.from = from;
     }
 
+    /** Arma un correo de texto UTF-8 y lo envía. Cualquier fallo pasa por classify. */
     @Override
     public void send(EmailMessage email) {
         try {
@@ -47,6 +52,10 @@ public class SmtpEmailSender implements EmailSender {
         }
     }
 
+    /**
+     * Recorre las causas del fallo SMTP: un 5xx, una autenticación incorrecta o una dirección imposible no se reintenta, y un 4xx o un corte de red sí.
+     * Un 4xx gana aunque también haya direcciones inválidas genéricas.
+     */
     private static RuntimeException classify(Exception failure) {
         var pending = new ArrayDeque<Throwable>();
         Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());

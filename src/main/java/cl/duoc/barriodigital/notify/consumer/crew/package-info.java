@@ -1,4 +1,5 @@
 /**
- * Consumidor de q.cmd.crew. Genera el ticket para la cuadrilla cuando el trámite pasa a EN_TERRENO.
+ * Consumidor de q.cmd.crew.
+ * Cuando el trámite pasa a terreno, registra un ticket con el identificador, el tipo y la dirección.
  */
 package cl.duoc.barriodigital.notify.consumer.crew;

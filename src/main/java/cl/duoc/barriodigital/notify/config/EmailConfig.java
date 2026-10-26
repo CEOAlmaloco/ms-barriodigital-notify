@@ -11,16 +11,25 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.mail.javamail.JavaMailSender;
 
+/**
+ * Elige quién envía el correo.
+ * En modo logging solo deja una línea en el log; en modo smtp envía de verdad y exige servidor, puerto y usuario.
+ */
 @Configuration
 @EnableConfigurationProperties({EmailProperties.class, MailProperties.class})
 public class EmailConfig {
 
+    /** Modo por defecto. No envía correo real: solo deja una línea en el log. */
     @Bean
     @ConditionalOnProperty(prefix = "barriodigital.email", name = "mode", havingValue = "logging", matchIfMissing = true)
     EmailSender loggingEmailSender() {
         return new LoggingEmailSender();
     }
 
+    /**
+     * Modo smtp. Antes de crear el sender revisa host, puerto, protocolo, usuario y timeouts.
+     * Si falta algo, la aplicación no arranca.
+     */
     @Bean
     @ConditionalOnProperty(prefix = "barriodigital.email", name = "mode", havingValue = "smtp")
     EmailSender smtpEmailSender(EmailProperties email, MailProperties mail, ObjectProvider<JavaMailSender> sender) {
