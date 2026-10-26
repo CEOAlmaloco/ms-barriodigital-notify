@@ -12,10 +12,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Topología del contrato EP2-02. RabbitAdmin la declara al abrir la conexión.
- * notify también declara los exchanges para quedar healthy sin esperar a requests.
- * Declarar dos veces lo mismo no cambia nada; con otras propiedades RabbitMQ responde PRECONDITION_FAILED.
- * Los consumidores no declaran infraestructura.
+ * Declara exchanges, colas clásicas durables (no replicadas) y bindings al abrir la conexión, también para quedar healthy sin esperar a requests.
+ * Un direct enruta por igualdad y un topic por patrón (* una palabra, # cero o más). La DLQ no tiene consumidor.
  */
 @Configuration
 @EnableConfigurationProperties(RabbitNamesProperties.class)
@@ -23,121 +21,122 @@ public class RabbitTopologyConfig {
 
     private final RabbitNamesProperties names;
 
+    /** Recibe los nombres leídos del yml para crear exchanges, colas y bindings. */
     public RabbitTopologyConfig(RabbitNamesProperties names) {
         this.names = names;
     }
 
-    /** cmd.topic: por aquí publica requests los email.* y certificate.*. */
+    /** Exchange topic. Enruta por patrón: * es una palabra y # es cero o más. Por aquí publica requests los email.* y certificate.*. */
     @Bean
     TopicExchange topicExchange() {
         return ExchangeBuilder.topicExchange(names.exchange().topic()).durable(true).build();
     }
 
-    /** cmd.direct: por aquí publica requests el crew.ticket. */
+    /** Exchange direct. Enruta por igualdad exacta de routing key. Por aquí publica requests el crew.ticket. */
     @Bean
     DirectExchange directExchange() {
         return ExchangeBuilder.directExchange(names.exchange().direct()).durable(true).build();
     }
 
-    /** cmd.dead.dlx: recibe lo que las colas principales dan por muerto. */
+    /** Exchange direct de mensajes muertos. Recibe por igualdad de routing key lo que las colas principales descartan. */
     @Bean
     DirectExchange deadExchange() {
         return ExchangeBuilder.directExchange(names.exchange().dead()).durable(true).build();
     }
 
-    /** q.cmd.email: muere hacia cmd.dead.dlx con email.dead. */
+    /** Cola clásica q.cmd.email, no replicada. Si el mensaje muere, va a cmd.dead.dlx con email.dead. */
     @Bean
     Queue emailQueue() {
         return mainQueue(names.queue().email(), names.routing().emailDead());
     }
 
-    /** q.cmd.crew: muere hacia cmd.dead.dlx con crew.dead. */
+    /** Cola clásica q.cmd.crew, no replicada. Si el mensaje muere, va a cmd.dead.dlx con crew.dead. */
     @Bean
     Queue crewQueue() {
         return mainQueue(names.queue().crew(), names.routing().crewDead());
     }
 
-    /** q.cmd.certificate: muere hacia cmd.dead.dlx con certificate.dead. */
+    /** Cola clásica q.cmd.certificate, no replicada. Si el mensaje muere, va a cmd.dead.dlx con certificate.dead. */
     @Bean
     Queue certificateQueue() {
         return mainQueue(names.queue().certificate(), names.routing().certificateDead());
     }
 
-    /** q.cmd.email.dlq: sin consumidor ni dead-letter propio. */
+    /** Cola clásica q.cmd.email.dlq. No tiene consumidor ni dead-letter propio. */
     @Bean
     Queue emailDlq() {
         return QueueBuilder.durable(names.queue().emailDlq()).build();
     }
 
-    /** q.cmd.crew.dlq: sin consumidor ni dead-letter propio. */
+    /** Cola clásica q.cmd.crew.dlq. No tiene consumidor ni dead-letter propio. */
     @Bean
     Queue crewDlq() {
         return QueueBuilder.durable(names.queue().crewDlq()).build();
     }
 
-    /** q.cmd.certificate.dlq: sin consumidor ni dead-letter propio. */
+    /** Cola clásica q.cmd.certificate.dlq. No tiene consumidor ni dead-letter propio. */
     @Bean
     Queue certificateDlq() {
         return QueueBuilder.durable(names.queue().certificateDlq()).build();
     }
 
-    /** cmd.direct + email.send → q.cmd.email. */
+    /** Binding direct: email.send enruta a q.cmd.email solo si la routing key es igual. */
     @Bean
     Binding emailDirectBinding() {
         return BindingBuilder.bind(emailQueue()).to(directExchange()).with(names.routing().emailSend());
     }
 
-    /** cmd.topic + email.* → q.cmd.email. */
+    /** Binding topic: el patrón email.* (una palabra) enruta a q.cmd.email. */
     @Bean
     Binding emailTopicBinding() {
         return BindingBuilder.bind(emailQueue()).to(topicExchange()).with(names.routing().emailTopic());
     }
 
-    /** cmd.direct + crew.ticket → q.cmd.crew. */
+    /** Binding direct: crew.ticket enruta a q.cmd.crew solo si la routing key es igual. */
     @Bean
     Binding crewDirectBinding() {
         return BindingBuilder.bind(crewQueue()).to(directExchange()).with(names.routing().crewTicket());
     }
 
-    /** cmd.topic + crew.# → q.cmd.crew. */
+    /** Binding topic: el patrón crew.# (cero o más palabras) enruta a q.cmd.crew. */
     @Bean
     Binding crewTopicBinding() {
         return BindingBuilder.bind(crewQueue()).to(topicExchange()).with(names.routing().crewTopic());
     }
 
-    /** cmd.direct + certificate.gen → q.cmd.certificate. */
+    /** Binding direct: certificate.gen enruta a q.cmd.certificate solo si la routing key es igual. */
     @Bean
     Binding certificateDirectBinding() {
         return BindingBuilder.bind(certificateQueue()).to(directExchange())
                 .with(names.routing().certificateGen());
     }
 
-    /** cmd.topic + certificate.* → q.cmd.certificate. */
+    /** Binding topic: el patrón certificate.* (una palabra) enruta a q.cmd.certificate. */
     @Bean
     Binding certificateTopicBinding() {
         return BindingBuilder.bind(certificateQueue()).to(topicExchange())
                 .with(names.routing().certificateTopic());
     }
 
-    /** cmd.dead.dlx + email.dead → q.cmd.email.dlq. */
+    /** Binding direct: email.dead, por igualdad, enruta a q.cmd.email.dlq, que no tiene consumidor. */
     @Bean
     Binding emailDeadBinding() {
         return BindingBuilder.bind(emailDlq()).to(deadExchange()).with(names.routing().emailDead());
     }
 
-    /** cmd.dead.dlx + crew.dead → q.cmd.crew.dlq. */
+    /** Binding direct: crew.dead, por igualdad, enruta a q.cmd.crew.dlq, que no tiene consumidor. */
     @Bean
     Binding crewDeadBinding() {
         return BindingBuilder.bind(crewDlq()).to(deadExchange()).with(names.routing().crewDead());
     }
 
-    /** cmd.dead.dlx + certificate.dead → q.cmd.certificate.dlq. */
+    /** Binding direct: certificate.dead, por igualdad, enruta a q.cmd.certificate.dlq, que no tiene consumidor. */
     @Bean
     Binding certificateDeadBinding() {
         return BindingBuilder.bind(certificateDlq()).to(deadExchange()).with(names.routing().certificateDead());
     }
 
-    /** Cola clásica durable con su dead-letter. Sin x-queue-type: no es quorum. */
+    /** Cola clásica durable, no replicada, con dead-letter. Sin x-queue-type no es quorum. */
     private Queue mainQueue(String name, String deadRoutingKey) {
         return QueueBuilder.durable(name)
                 .deadLetterExchange(names.exchange().dead())

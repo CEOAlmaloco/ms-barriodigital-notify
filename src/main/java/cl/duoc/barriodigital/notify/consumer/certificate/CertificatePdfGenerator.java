@@ -20,7 +20,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Traducción pequeña de los tokens del frontend; no utiliza recursos remotos ni fuentes del sistema. */
+/**
+ * Dibuja el PDF con la fuente Inter embebida, para que las tildes y la eñe se vean igual en cualquier computador.
+ * No busca fuentes en internet ni en el sistema.
+ */
 @Component
 public class CertificatePdfGenerator {
     private static final Color PRIMARY = Color.decode("#814B8B");
@@ -38,6 +41,10 @@ public class CertificatePdfGenerator {
     private final byte[] regular;
     private final byte[] semibold;
 
+    /**
+     * Carga las fuentes Inter y prueba que puedan escribir tildes y eñes.
+     * Si faltan, la aplicación no arranca, para no consumir un mensaje y descubrirlo tarde.
+     */
     public CertificatePdfGenerator() {
         try {
             regular = resource("/fonts/inter/Inter-Regular.ttf");
@@ -52,6 +59,7 @@ public class CertificatePdfGenerator {
         }
     }
 
+    /** Lee una fuente embebida. Si no está en el jar, falla. */
     private static byte[] resource(String name) throws IOException {
         try (InputStream input = CertificatePdfGenerator.class.getResourceAsStream(name)) {
             if (input == null) {
@@ -61,10 +69,15 @@ public class CertificatePdfGenerator {
         }
     }
 
+    /** Carga la fuente dentro del PDF para poder medir y dibujar texto. */
     private static PDType0Font font(PDDocument pdf, byte[] bytes) throws IOException {
         return PDType0Font.load(pdf, new ByteArrayInputStream(bytes), true);
     }
 
+    /**
+     * Dibuja el A4 y lo escribe en el stream.
+     * Si un carácter no se puede dibujar, el mensaje no se reintenta: la fuente no va a incorporarlo.
+     */
     public void write(CertificateDocument document, OutputStream output) throws IOException {
         try (PDDocument pdf = new PDDocument()) {
             PDType0Font body = font(pdf, regular);
@@ -99,6 +112,7 @@ public class CertificatePdfGenerator {
         }
     }
 
+    /** Recorre el texto y rechaza el carácter que la fuente no tiene, salvo salto y tabulación. */
     private static void validate(PDType0Font font, String field, String value) throws IOException {
         for (int offset = 0; offset < value.length();) {
             int point = value.codePointAt(offset);
@@ -116,6 +130,7 @@ public class CertificatePdfGenerator {
         }
     }
 
+    /** Parte un párrafo en líneas que caben en el ancho de la hoja. */
     private static List<String> lines(String text, PDType0Font font, float size) throws IOException {
         List<String> result = new ArrayList<>();
         // Los blancos de control son disposición, no glifos. Se conservan los párrafos vacíos.
@@ -150,6 +165,7 @@ public class CertificatePdfGenerator {
         return result;
     }
 
+    /** Cursor vertical de la página. Abre otra hoja cuando el texto no cabe. */
     private static final class Layout implements AutoCloseable {
         private final PDDocument pdf;
         private final PDType0Font body;
@@ -158,6 +174,7 @@ public class CertificatePdfGenerator {
         private PDPageContentStream stream;
         private float y;
 
+        /** Abre la primera página. */
         private Layout(PDDocument pdf, PDType0Font body, PDType0Font heading, String title) throws IOException {
             this.pdf = pdf;
             this.body = body;
@@ -166,6 +183,7 @@ public class CertificatePdfGenerator {
             page();
         }
 
+        /** Cierra la página anterior, abre otra y pinta encabezado, título y "Página N". */
         private void page() throws IOException {
             if (stream != null) {
                 stream.close();
@@ -186,6 +204,7 @@ public class CertificatePdfGenerator {
             text(footer, body, METADATA_SIZE, SECONDARY, PDRectangle.A4.getWidth() - MARGIN - footerWidth, 30);
         }
 
+        /** Dibuja un texto en una posición. */
         private void text(String value, PDType0Font font, float size, Color color, float x, float baseline) throws IOException {
             stream.beginText();
             stream.setFont(font, size);
@@ -195,6 +214,7 @@ public class CertificatePdfGenerator {
             stream.endText();
         }
 
+        /** Dibuja una línea horizontal del color y grosor pedidos. */
         private void rule(Color color, float width) throws IOException {
             stream.setStrokingColor(color);
             stream.setLineWidth(width);
@@ -203,12 +223,14 @@ public class CertificatePdfGenerator {
             stream.stroke();
         }
 
+        /** Si no queda espacio, abre otra página. */
         private void ensure(float height) throws IOException {
             if (y - height < MARGIN) {
                 page();
             }
         }
 
+        /** Escribe un párrafo línea por línea y baja el cursor. */
         private void paragraph(String value, PDType0Font font, float size, float leading, Color color) throws IOException {
             for (String line : lines(value, font, size)) {
                 ensure(leading);
@@ -217,6 +239,7 @@ public class CertificatePdfGenerator {
             }
         }
 
+        /** Pinta la etiqueta y debajo el valor. */
         private void field(String label, String value, boolean metadata) throws IOException {
             float size = metadata ? METADATA_SIZE : BODY_SIZE;
             float leading = metadata ? 14 : LEADING;
@@ -227,6 +250,7 @@ public class CertificatePdfGenerator {
             gap(metadata ? 10 : 16);
         }
 
+        /** Deja espacio y dibuja la línea que separa los datos del trámite de los del evento. */
         private void metadataSeparator() throws IOException {
             ensure(80);
             gap(8);
@@ -234,10 +258,12 @@ public class CertificatePdfGenerator {
             gap(24);
         }
 
+        /** Baja el cursor sin escribir. */
         private void gap(float height) {
             y -= height;
         }
 
+        /** Cierra el dibujo de la página al terminar el PDF. */
         @Override
         public void close() throws IOException {
             if (stream != null) {

@@ -1,4 +1,5 @@
 /**
- * Consumidor de q.cmd.email. Envía los emails de admisión, visita y cierre del trámite.
+ * Consumidor de q.cmd.email.
+ * Avisa cuando el trámite fue admitido, cuando va a terreno y cuando quedó resuelto.
  */
 package cl.duoc.barriodigital.notify.consumer.email;

@@ -9,18 +9,23 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 
 /**
- * Lee el body del mensaje como sobre EP2-01. Si no es JSON, no es un objeto o faltan type, eventId o payload,
- * lanza InvalidEnvelopeException. No valida que el type sea uno de los seis: eso lo decide cada consumidor.
+ * Convierte el cuerpo del mensaje en un objeto con type, eventId y payload.
+ * Si el JSON está roto o faltan esos campos, lanza InvalidEnvelopeException. No revisa si el type es uno de los seis: eso lo hace cada consumidor.
  */
 @Component
 public class EnvelopeParser {
 
     private final ObjectMapper objectMapper;
 
+    /** Recibe el conversor JSON. */
     public EnvelopeParser(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * Convierte los bytes en un mensaje y exige un objeto JSON con type, eventId y payload objeto.
+     * Si falta algo, el mensaje no es válido. El type lo valida cada consumidor.
+     */
     public MessageEnvelope parse(byte[] body) {
         JsonNode root;
         try {

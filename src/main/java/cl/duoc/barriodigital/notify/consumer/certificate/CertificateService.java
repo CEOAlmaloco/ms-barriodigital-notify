@@ -13,6 +13,10 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.Map;
 
+/**
+ * Prepara el PDF del trámite.
+ * Lee los datos del mensaje, pide que se dibuje y que se guarde, y anota el nombre del archivo.
+ */
 @Service
 public class CertificateService {
     private static final Logger log = LoggerFactory.getLogger(CertificateService.class);
@@ -20,12 +24,17 @@ public class CertificateService {
     private final Clock clock;
     private final ObjectMapper mapper;
 
+    /** Recibe quién guarda el archivo, el reloj UTC y el conversor del log. */
     public CertificateService(CertificateFileStore store, Clock clock, ObjectMapper mapper) {
         this.store = store;
         this.clock = clock;
         this.mapper = mapper;
     }
 
+    /**
+     * Acepta certificate.receipt y certificate.resolved, exige requestId y procedureType, y si la etiqueta viene vacía usa el tipo.
+     * Guarda el PDF y deja en el log el tipo, el eventId y el nombre del archivo.
+     */
     public void handle(MessageEnvelope envelope) throws Exception {
         var kind = CertificateDocument.Kind.fromType(envelope.type());
         JsonNode payload = envelope.payload();
@@ -42,6 +51,7 @@ public class CertificateService {
         log.info("certificate-pdf {}", entry);
     }
 
+    /** Lee un texto obligatorio. Si falta, el mensaje no se reintenta. */
     private static String requiredText(JsonNode payload, String field) {
         String value = optionalText(payload, field);
         if (value.isBlank()) {
@@ -50,6 +60,7 @@ public class CertificateService {
         return value;
     }
 
+    /** Lee un texto opcional. Vacío si no viene. Si no es texto, no se reintenta. */
     private static String optionalText(JsonNode payload, String field) {
         JsonNode node = payload.get(field);
         if (node == null || node.isNull()) {
