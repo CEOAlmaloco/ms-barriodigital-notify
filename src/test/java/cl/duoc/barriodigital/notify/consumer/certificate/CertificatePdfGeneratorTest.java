@@ -21,7 +21,11 @@ class CertificatePdfGeneratorTest {
     private final CertificatePdfGenerator generator = new CertificatePdfGenerator();
 
     static CertificateDocument document(CertificateDocument.Kind kind, String request, String address) {
-        return new CertificateDocument(kind, "Evento-Ñ/AbC", request, "atencion", "Atención pública: ¿qué pasó?",
+        return document(kind, request, address, "");
+    }
+
+    static CertificateDocument document(CertificateDocument.Kind kind, String request, String address, String folio) {
+        return new CertificateDocument(kind, "Evento-Ñ/AbC", request, folio, "atencion", "Atención pública: ¿qué pasó?",
                 address, Instant.parse("2026-10-16T15:10:00Z"), Instant.parse("2026-10-17T20:30:00Z"));
     }
 
@@ -56,11 +60,22 @@ class CertificatePdfGeneratorTest {
 
     @Test
     void omiteDireccionYPublicacionAusentes() throws Exception {
-        var data = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "id", "bache", "Bache", "",
+        var data = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "id", "", "bache", "Bache", "",
                 null, Instant.parse("2026-10-17T20:30:00Z"));
         try (PDDocument pdf = Loader.loadPDF(generate(data))) {
             assertThat(new PDFTextStripper().getText(pdf)).doesNotContain("Dirección", "Publicación del evento")
+                    .doesNotContain("Folio de seguimiento")
                     .contains("Generación del documento", "17/10/2026 20:30:00 UTC");
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(CertificateDocument.Kind.class)
+    void muestraElFolioDeSeguimientoAntesDelIdentificador(CertificateDocument.Kind kind) throws Exception {
+        try (PDDocument pdf = Loader.loadPDF(generate(document(kind, "caso-ñ-123", "Pasaje Ñandú 120", "BD-2026-000123")))) {
+            String text = new PDFTextStripper().getText(pdf);
+            assertThat(text).contains("Folio de seguimiento", "BD-2026-000123", "caso-ñ-123");
+            assertThat(text.indexOf("Folio de seguimiento")).isLessThan(text.indexOf("Identificador del trámite"));
         }
     }
 
@@ -95,11 +110,12 @@ class CertificatePdfGeneratorTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"requestId", "procedureType", "procedureLabel", "address", "eventId"})
+    @ValueSource(strings = {"requestId", "folio", "procedureType", "procedureLabel", "address", "eventId"})
     void glifoAusenteIdentificaCampoYCodigoSinVolcarDatos(String field) {
         String invalid = "dato-personal-" + new String(Character.toChars(0x10FFFF));
         var data = new CertificateDocument(CertificateDocument.Kind.RECEIPT,
                 field.equals("eventId") ? invalid : "e", field.equals("requestId") ? invalid : "id",
+                field.equals("folio") ? invalid : "",
                 field.equals("procedureType") ? invalid : "tipo",
                 field.equals("procedureLabel") || field.equals("procedureType") ? invalid : "Etiqueta",
                 field.equals("address") ? invalid : "", null, Instant.EPOCH);
@@ -117,7 +133,7 @@ class CertificatePdfGeneratorTest {
 
     @Test
     void coberturaSeCompruebaEnLosDatosMostrados() throws Exception {
-        var data = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "id",
+        var data = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "id", "",
                 new String(Character.toChars(0x10FFFF)), "Etiqueta recibida", "", null, Instant.EPOCH);
         try (var pdf = Loader.loadPDF(generate(data))) {
             assertThat(new PDFTextStripper().getText(pdf)).contains("Etiqueta recibida");

@@ -57,8 +57,22 @@ class CertificateServiceTest {
         assertThat(payload).isEqualTo(original);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"missing", "null", "\"   \"", "\" BD-2026-000123 \""})
+    void folioEsOpcionalYSeRecorta(String value) throws Exception {
+        ObjectNode payload = payload();
+        if (!value.equals("missing")) {
+            payload.set("folio", mapper.readTree(value));
+        }
+        when(store.save(any())).thenReturn(Path.of("certificate.pdf"));
+        service.handle(envelope("certificate.resolved", payload));
+        var captor = ArgumentCaptor.forClass(CertificateDocument.class);
+        verify(store).save(captor.capture());
+        assertThat(captor.getValue().folio()).isEqualTo(value.contains("BD") ? "BD-2026-000123" : "");
+    }
+
     static Stream<Arguments> invalidFields() {
-        return Stream.of("requestId", "procedureType", "procedureLabel", "address").flatMap(field ->
+        return Stream.of("requestId", "folio", "procedureType", "procedureLabel", "address").flatMap(field ->
                 Stream.of("123", "true", "[]", "{}").map(value -> Arguments.of(field, value)));
     }
 

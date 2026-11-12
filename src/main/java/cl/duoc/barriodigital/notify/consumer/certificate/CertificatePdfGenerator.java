@@ -83,6 +83,7 @@ public class CertificatePdfGenerator {
             PDType0Font body = font(pdf, regular);
             PDType0Font heading = font(pdf, semibold);
             validate(body, "requestId", document.requestId());
+            validate(body, "folio", document.folio());
             validate(body, document.procedureLabel().equals(document.procedureType()) ? "procedureType" : "procedureLabel",
                     document.procedureLabel());
             validate(body, "address", document.address());
@@ -95,6 +96,9 @@ public class CertificatePdfGenerator {
             try (Layout layout = new Layout(pdf, body, heading, document.kind().title())) {
                 layout.paragraph(document.kind().mainText(), body, BODY_SIZE, LEADING, TEXT);
                 layout.gap(24);
+                if (!document.folio().isEmpty()) {
+                    layout.field("Folio de seguimiento", document.folio(), false);
+                }
                 layout.field("Identificador del trámite", document.requestId(), false);
                 layout.field("Tipo de trámite", document.procedureLabel(), false);
                 if (!document.address().isEmpty()) {

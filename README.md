@@ -10,7 +10,7 @@ Lee los eventos que publica `ms-barriodigital-requests` al crear o cambiar un tr
 
 | Cola | Qué hace |
 |---|---|
-| `q.cmd.email` | Email de admisión, visita y cierre |
+| `q.cmd.email` | Email de admisión, visita, cierre y rechazo |
 | `q.cmd.crew` | Ticket para la cuadrilla |
 | `q.cmd.certificate` | Comprobante y certificado en PDF |
 
@@ -42,22 +42,25 @@ El timeout de conexión es de 2000 ms (`spring.rabbitmq.connection-timeout`).
 
 ## Correos: payload y contenido
 
-El listener usa `barriodigital.rabbit.queue.email`. Acepta exclusivamente los tres tipos de la tabla:
+El listener usa `barriodigital.rabbit.queue.email`. Acepta exclusivamente los cuatro tipos de la tabla (`email.rejected` desde EP3-34):
 
 | type | Asunto exacto | Mensaje principal exacto |
 |---|---|---|
 | `email.admitted` | BarrioDigital: trámite admitido | Tu trámite fue admitido para su gestión. |
 | `email.visit` | BarrioDigital: trámite en terreno | Tu trámite pasó a la etapa de atención en terreno. |
 | `email.resolved` | BarrioDigital: trámite resuelto | Tu trámite fue marcado como resuelto. |
+| `email.rejected` | BarrioDigital: trámite rechazado | Tu trámite fue rechazado. |
 
 El payload es un objeto con estos campos:
 
 - `solicitanteEmail`: obligatorio, textual y no vacío tras recortar espacios. Debe ser una dirección única válida según Jakarta Mail, sin consulta DNS. No se admiten listas, grupos, nombres visibles ni saltos de línea. Se conserva la capitalización.
-- `requestId`, `procedureType`, `procedureLabel`, `address`: opcionales. Admiten ausencia, null y texto vacío. Un valor no nulo de otro tipo JSON es un error no recuperable. Los textos se recortan para presentarlos, sin modificar el payload.
+- `rejectionReason`: obligatorio solo en `email.rejected`, textual y no vacío tras recortar espacios; si falta, el mensaje es no recuperable y va a la DLQ sin enviarse. En los demás tipos se ignora. El motivo interno del Admin (`interventionReason`) nunca llega en este payload (EP3-04, sección 6.3).
+- `folio`, `requestId`, `procedureType`, `procedureLabel`, `address`: opcionales. Admiten ausencia, null y texto vacío. Un valor no nulo de otro tipo JSON es un error no recuperable. Los textos se recortan para presentarlos, sin modificar el payload. El formato del folio no se valida.
 
-Una única composición produce el texto plano para ambos senders. Tras el mensaje principal aparece una línea en blanco y:
+Una única composición produce el texto plano para ambos senders. Tras el mensaje principal, en `email.rejected` aparece una línea en blanco y `Motivo: <rejectionReason>`. Luego, en todos los tipos, una línea en blanco y:
 
 ```text
+Folio: <folio, solo cuando tiene texto>
 Trámite: <procedureLabel, si tiene texto; si no, procedureType; si no, Trámite vecinal>
 Identificador: <requestId, solo cuando tiene texto>
 Dirección: <address, solo cuando tiene texto>
@@ -143,6 +146,7 @@ La deduplicación por `cola|eventId` recuerda hasta 10 000 claves en memoria. La
 | Campo | Regla |
 |---|---|
 | `requestId`, `procedureType` | Obligatorios, textuales y con contenido tras recortar espacios. No se sustituye el identificador por `correlationId`. |
+| `folio` | Opcional (EP3-34); ausente, null o blanco se omite. Se muestra como «Folio de seguimiento», antes del identificador. |
 | `procedureLabel` | Opcional; ausente, null o blanco usa `procedureType`. |
 | `address` | Opcional; ausente, null o blanco se omite. |
 | `solicitanteEmail` | No se utiliza, valida ni muestra. |
@@ -154,7 +158,7 @@ Un valor no nulo y no textual en los campos utilizados se rechaza, sin convertir
 | `certificate.receipt` | Comprobante de ingreso | Tu trámite fue registrado en BarrioDigital con estado INGRESADO. |
 | `certificate.resolved` | Certificado de resolución | Tu trámite fue marcado como RESUELTO en BarrioDigital. |
 
-El cuerpo muestra identificador completo, etiqueta o código, dirección si existe y «Estado correspondiente al evento». No es una consulta del estado actual. Los metadatos incluyen `eventId` completo, «Publicación del evento» cuando hay `timestamp` y «Generación del documento» desde un `Clock` UTC inyectable. Formato `dd/MM/uuuu HH:mm:ss UTC`. El timestamp no es fecha de ingreso ni resolución. No se inventan nombres, trabajos realizados, visitas, datos municipales o folios. No hay firmas, sellos, QR, validez oficial, descarga HTTP ni adjuntos de email.
+El cuerpo muestra el folio de seguimiento si existe, identificador completo, etiqueta o código, dirección si existe y «Estado correspondiente al evento». El folio es el número de seguimiento del vecino (EP3-05), no un folio legal. No es una consulta del estado actual. Los metadatos incluyen `eventId` completo, «Publicación del evento» cuando hay `timestamp` y «Generación del documento» desde un `Clock` UTC inyectable. Formato `dd/MM/uuuu HH:mm:ss UTC`. El timestamp no es fecha de ingreso ni resolución. No se inventan nombres, trabajos realizados, visitas, datos municipales ni folios: el folio solo aparece si viene en el payload. No hay firmas, sellos, QR, validez oficial, descarga HTTP ni adjuntos de email.
 
 PDFBox **3.0.8**, versión estable publicada por Apache y compatible con Java 21 (mínimo Java 8), se fija en el POM: https://pdfbox.apache.org/download.html. Se usa `spring-jcl` existente en lugar de incorporar otra implementación de Commons Logging. Inter 4.1 estática regular y seminegrita procede del ZIP oficial, sin modificaciones; licencia OFL 1.1, copyright, URLs y hashes están en `src/main/resources/fonts/inter/README.md` y `LICENSE.txt`. Las fuentes se cargan del JAR y se incrustan como subconjuntos. No depende de fuentes del sistema ni de la red. Sus recursos se comprueban al iniciar; ausentes o corruptos son un defecto de configuración.
 
@@ -293,7 +297,7 @@ Cada paquete tiene un `package-info.java` con su responsabilidad, porque Git no 
 .\mvnw.cmd -B clean verify
 ```
 
-Los tests no necesitan broker ni SMTP. Revisan topología, propiedades, política compartida, composición de los tres correos, validación, orden envío/ACK, duplicados y clasificación de fallos SMTP envueltos. Usan `Channel` y `JavaMailSender` simulados; el mensaje MIME sí se construye y serializa para comprobar UTF-8. `ApplicationContextRunner` comprueba selección y errores de configuración sin enviar. `src/test/resources/application.properties` apaga los health de RabbitMQ y correo, desactiva `spring.rabbitmq.listener.simple.auto-startup` y pone una password de prueba. Los listeners siguen activos en la configuración normal.
+Los tests no necesitan broker ni SMTP. Revisan topología, propiedades, política compartida, composición de los cuatro correos (con folio y motivo de rechazo), validación, orden envío/ACK, duplicados y clasificación de fallos SMTP envueltos. Usan `Channel` y `JavaMailSender` simulados; el mensaje MIME sí se construye y serializa para comprobar UTF-8. `ApplicationContextRunner` comprueba selección y errores de configuración sin enviar. `src/test/resources/application.properties` apaga los health de RabbitMQ y correo, desactiva `spring.rabbitmq.listener.simple.auto-startup` y pone una password de prueba. Los listeners siguen activos en la configuración normal.
 
 EP2-17 añade validación, composición y serialización del ticket, preservación del payload, número estable y escape de caracteres. La composición del listener usa `ManualAckProcessor` real, `Channel` simulado y captura del log para comprobar registro antes del ACK y duplicados. Un auxiliar exclusivo de tests permite inyectar un `Sleeper` simulado sin ampliar la API de producción. Los fallos controlados del servicio verifican tres intentos y NACK sin esperas reales; no representan un fallo real del destino de logs.
 
@@ -369,6 +373,16 @@ Invoke-RestMethod -Headers $demoHeaders -Uri "$demoApi/queues/%2F/q.cmd.email.dl
 Cada publicación debe devolver `routed: true`. Esperar al procesamiento y a la actualización de estadísticas: tres logs `email-simulado`, un INFO `duplicado` y dos ERROR `mensaje-muerto` con `intentos=0`. La cola principal debe quedar sin mensajes listos ni pendientes de ACK; las estadísticas de ACK deben reflejar también el duplicado. La DLQ debe contener dos mensajes y ningún consumidor. Puede inspeccionarse en Management, puerto 15679.
 
 Para comprobar el agotamiento recuperable sin enviar correos reales: detener Notify, mantener el mismo broker dedicado y reiniciar con `EMAIL_MODE=smtp`, `EMAIL_FROM=avisos@example.com`, `SMTP_HOST=127.0.0.1`, `SMTP_PORT` apuntando a un puerto local confirmado sin servidor, y `SMTP_AUTH=false`. Publicar un nuevo `eventId`: tras los tres fallos debe aparecer `intentos=3` y un mensaje adicional en DLQ. No usar un servidor SMTP real para esta comprobación.
+
+Para el rechazo y el folio de EP3-34, con el mismo broker dedicado y Notify en `EMAIL_MODE=logging`:
+
+```powershell
+$rejectedPayload = @{solicitanteEmail='vecino@example.com'; folio='BD-2026-000123'; procedureLabel='Atención vecinal'; rejectionReason='La dirección está fuera de la comuna'}
+Publish-DemoEmail 'demo-rejected-1' 'email.rejected' $rejectedPayload
+Publish-DemoEmail 'demo-rejected-sin-motivo' 'email.rejected' @{solicitanteEmail='vecino@example.com'}
+```
+
+Debe aparecer un log `email-simulado type=email.rejected` y un ERROR `mensaje-muerto` con `intentos=0` para el rechazo sin motivo, que queda en la DLQ.
 
 Al terminar, detener Notify con Ctrl+C y ejecutar `docker stop bd-ep2-email-demo`. Al usar `--rm` y ningún volumen compartido, se descarta únicamente el broker dedicado. No borrar ni vaciar colas del clúster del proyecto.
 

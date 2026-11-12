@@ -33,16 +33,18 @@ public class CertificateService {
 
     /**
      * Acepta certificate.receipt y certificate.resolved, exige requestId y procedureType, y si la etiqueta viene vacía usa el tipo.
+     * El folio es opcional: si no viene, el PDF no lo muestra.
      * Guarda el PDF y deja en el log el tipo, el eventId y el nombre del archivo.
      */
     public void handle(MessageEnvelope envelope) throws Exception {
         var kind = CertificateDocument.Kind.fromType(envelope.type());
         JsonNode payload = envelope.payload();
         String requestId = requiredText(payload, "requestId");
+        String folio = optionalText(payload, "folio");
         String procedureType = requiredText(payload, "procedureType");
         String label = optionalText(payload, "procedureLabel");
         String address = optionalText(payload, "address");
-        var document = new CertificateDocument(kind, envelope.eventId(), requestId, procedureType,
+        var document = new CertificateDocument(kind, envelope.eventId(), requestId, folio, procedureType,
                 label.isBlank() ? procedureType : label, address, envelope.timestamp(), clock.instant());
         Path file = store.save(document);
         // Serialización JSON compacta: no permite que los identificadores inyecten líneas en el log.

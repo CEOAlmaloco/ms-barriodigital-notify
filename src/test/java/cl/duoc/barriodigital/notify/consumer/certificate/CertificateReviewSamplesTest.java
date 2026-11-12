@@ -19,9 +19,9 @@ class CertificateReviewSamplesTest {
         Path root = Path.of(System.getProperty("certificate.review-dir"));
         var generator = new CertificatePdfGenerator();
         var cases = List.of(
-                CertificatePdfGeneratorTest.document(CertificateDocument.Kind.RECEIPT, "caso-demo-ingreso", "Los Aromos 120"),
+                CertificatePdfGeneratorTest.document(CertificateDocument.Kind.RECEIPT, "caso-demo-ingreso", "Los Aromos 120", "BD-2026-000123"),
                 CertificatePdfGeneratorTest.document(CertificateDocument.Kind.RESOLVED, "caso-demo-resuelto", "Los Aromos 120"),
-                new CertificateDocument(CertificateDocument.Kind.RECEIPT, "sin-metadatos", "caso-demo-sin-dirección", "bache", "Bache en calle", "", null, java.time.Instant.parse("2026-10-17T20:30:00Z")),
+                new CertificateDocument(CertificateDocument.Kind.RECEIPT, "sin-metadatos", "caso-demo-sin-dirección", "", "bache", "Bache en calle", "", null, java.time.Instant.parse("2026-10-17T20:30:00Z")),
                 CertificatePdfGeneratorTest.document(CertificateDocument.Kind.RECEIPT, "Ñuñoa-¿123?", "¡Atención pública! Pasaje Ñandú \"Norte\" / Sur\\Centro\nSegunda línea: áéíóú, ü y ñ."),
                 CertificatePdfGeneratorTest.document(CertificateDocument.Kind.RESOLVED, "AbC123ñ".repeat(230), "Pasaje Ñandú 120"),
                 CertificatePdfGeneratorTest.document(CertificateDocument.Kind.RESOLVED, "caso-demo-varias-páginas", "Atención en Pasaje Ñandú 120, sector norte.\n".repeat(68)));

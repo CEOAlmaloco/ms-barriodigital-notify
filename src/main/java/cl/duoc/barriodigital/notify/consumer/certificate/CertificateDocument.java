@@ -7,8 +7,9 @@ import java.time.Instant;
 /**
  * Datos que van impresos en el PDF.
  * Distingue el comprobante de ingreso del certificado de resolución.
+ * folio es el número de seguimiento (EP3-05), vacío si no viene. No es un folio legal.
  */
-public record CertificateDocument(Kind kind, String eventId, String requestId, String procedureType,
+public record CertificateDocument(Kind kind, String eventId, String requestId, String folio, String procedureType,
                                   String procedureLabel, String address, Instant publishedAt, Instant generatedAt) {
 
     /** Los dos documentos posibles. Cada uno trae su type, su nombre de archivo y sus textos. */
