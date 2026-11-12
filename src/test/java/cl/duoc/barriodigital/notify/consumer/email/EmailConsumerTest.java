@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
@@ -101,6 +102,71 @@ class EmailConsumerTest {
         verify(channel).basicAck(42L, false);
     }
 
+    @Test
+    void componeElRechazoConMotivoYFolioYTerminaElEnvioAntesDelAck() throws Exception {
+        ObjectNode payload = payload().put("requestId", "caso-1").put("folio", " BD-2026-000123 ")
+                .put("procedureLabel", "Bache en calle").put("address", "Los Aromos 120")
+                .put("rejectionReason", "  La dirección está fuera de la comuna  ");
+        ObjectNode original = payload.deepCopy();
+        boolean[] finished = {false};
+        doAnswer(invocation -> { finished[0] = true; return null; }).when(sender).send(any());
+        doAnswer(invocation -> { assertThat(finished[0]).isTrue(); return null; }).when(channel).basicAck(42L, false);
+
+        consumer.consume(message("email.rejected", payload), channel);
+
+        var order = inOrder(sender, channel);
+        order.verify(sender).send(new EmailMessage("email.rejected", "Vecino@example.com", "BarrioDigital: trámite rechazado",
+                "Tu trámite fue rechazado.\n\nMotivo: La dirección está fuera de la comuna"
+                        + "\n\nFolio: BD-2026-000123\nTrámite: Bache en calle\nIdentificador: caso-1\nDirección: Los Aromos 120"));
+        order.verify(channel).basicAck(42L, false);
+        verifyNoMoreInteractions(channel, sender);
+        assertThat(payload).isEqualTo(original);
+    }
+
+    static Stream<String> invalidRejectionReasons() {
+        return Stream.of("{}", "{\"rejectionReason\":null}", "{\"rejectionReason\":\"\"}",
+                "{\"rejectionReason\":\"  \\n \"}", "{\"rejectionReason\":123}", "{\"rejectionReason\":[]}");
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidRejectionReasons")
+    void rechazoSinMotivoVaALaDlqSinEnviar(String json) throws Exception {
+        ObjectNode payload = payload();
+        payload.setAll((ObjectNode) mapper.readTree(json));
+        consumer.consume(message("email.rejected", payload), channel);
+        verify(channel).basicReject(42L, false);
+        verifyNoMoreInteractions(channel);
+        verifyNoInteractions(sender);
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "email.admitted|BarrioDigital: trámite admitido|Tu trámite fue admitido para su gestión.",
+            "email.visit|BarrioDigital: trámite en terreno|Tu trámite pasó a la etapa de atención en terreno.",
+            "email.resolved|BarrioDigital: trámite resuelto|Tu trámite fue marcado como resuelto."
+    })
+    void muestraElFolioEnLosCorreosExistentesSinMotivo(String type, String subject, String main) throws Exception {
+        ObjectNode payload = payload().put("folio", "BD-2026-000123").put("procedureLabel", "Bache en calle")
+                .put("rejectionReason", "no debe aparecer");
+
+        consumer.consume(message(type, payload), channel);
+
+        verify(sender).send(new EmailMessage(type, "Vecino@example.com", subject,
+                main + "\n\nFolio: BD-2026-000123\nTrámite: Bache en calle"));
+        verify(channel).basicAck(42L, false);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"email.admitted", "email.rejected"})
+    void folioNuloOVacioSeOmite(String type) throws Exception {
+        ObjectNode payload = payload().put("folio", "   ").put("rejectionReason", "Duplicado");
+        consumer.consume(message(type, payload), channel);
+        var sent = ArgumentCaptor.forClass(EmailMessage.class);
+        verify(sender).send(sent.capture());
+        assertThat(sent.getValue().body()).doesNotContain("Folio");
+        verify(channel).basicAck(42L, false);
+    }
+
     static Stream<String> invalidRecipients() {
         return Stream.of("{}", "{\"solicitanteEmail\":null}", "{\"solicitanteEmail\":\"   \"}",
                 "{\"solicitanteEmail\":\"no-es-correo\"}", "{\"solicitanteEmail\":123}",
@@ -121,7 +187,7 @@ class EmailConsumerTest {
     }
 
     static Stream<String> invalidOptionals() {
-        return Stream.of("requestId", "procedureType", "procedureLabel", "address")
+        return Stream.of("requestId", "folio", "procedureType", "procedureLabel", "address")
                 .flatMap(field -> Stream.of("123", "[]", "{}", "true").map(value -> "{\"" + field + "\":" + value + "}"));
     }
 

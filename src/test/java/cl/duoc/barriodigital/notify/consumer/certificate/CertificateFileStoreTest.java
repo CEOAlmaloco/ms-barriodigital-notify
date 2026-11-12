@@ -25,7 +25,7 @@ class CertificateFileStoreTest {
     private final CertificatePdfGenerator generator = new CertificatePdfGenerator();
 
     private CertificateDocument data(String eventId) {
-        return new CertificateDocument(CertificateDocument.Kind.RECEIPT, eventId, "id", "bache", "Bache", "", null, Instant.EPOCH);
+        return new CertificateDocument(CertificateDocument.Kind.RECEIPT, eventId, "id", "", "bache", "Bache", "", null, Instant.EPOCH);
     }
 
     private CertificateFileStore store(Path path, CertificatePdfGenerator pdf) {
@@ -54,7 +54,7 @@ class CertificateFileStoreTest {
         var store = store(temporary, generator);
         Path target = store.save(data("e"));
         byte[] previous = Files.readAllBytes(target);
-        var next = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "nuevo", "bache", "Bache", "", null, Instant.now());
+        var next = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "nuevo", "", "bache", "Bache", "", null, Instant.now());
         assertThat(store.save(next)).isEqualTo(target);
         assertThat(Files.readAllBytes(target)).isNotEqualTo(previous);
     }
@@ -95,7 +95,7 @@ class CertificateFileStoreTest {
 
     @Test
     void glifoInvalidoNoSeReclasificaComoEscritura() throws Exception {
-        var invalid = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "id", "bache", "Bache",
+        var invalid = new CertificateDocument(CertificateDocument.Kind.RECEIPT, "e", "id", "", "bache", "Bache",
                 new String(Character.toChars(0x10FFFF)), null, Instant.EPOCH);
         assertThatThrownBy(() -> store(temporary, generator).save(invalid)).isInstanceOf(NonRecoverableException.class);
         try (var files = Files.list(temporary)) { assertThat(files).isEmpty(); }

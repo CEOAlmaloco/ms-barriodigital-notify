@@ -36,7 +36,8 @@ public class EmailConsumer {
 
     /**
      * Arma el correo según el tipo.
-     * email.admitted, email.visit y email.resolved tienen asunto y frase propios. Otro tipo, o un correo inválido, no se reintenta.
+     * email.admitted, email.visit, email.resolved y email.rejected tienen asunto y frase propios. Otro tipo, o un correo inválido, no se reintenta.
+     * email.rejected exige rejectionReason (EP3-33). El folio se muestra en todos cuando viene (EP3-34).
      */
     private void handle(MessageEnvelope envelope) {
         String subject;
@@ -54,6 +55,10 @@ public class EmailConsumer {
                 subject = "BarrioDigital: trámite resuelto";
                 main = "Tu trámite fue marcado como resuelto.";
             }
+            case "email.rejected" -> {
+                subject = "BarrioDigital: trámite rechazado";
+                main = "Tu trámite fue rechazado.";
+            }
             default -> throw new NonRecoverableException("tipo de email desconocido");
         }
 
@@ -62,13 +67,23 @@ public class EmailConsumer {
         if (recipient == null || !recipient.isTextual() || !EmailAddress.isValid(recipient.textValue())) {
             throw new NonRecoverableException("solicitanteEmail debe ser una direccion unica valida");
         }
+        String rejectionReason = envelope.type().equals("email.rejected") ? requiredText(payload, "rejectionReason") : "";
+        String folio = optionalText(payload, "folio");
         String requestId = optionalText(payload, "requestId");
         String procedureType = optionalText(payload, "procedureType");
         String procedureLabel = optionalText(payload, "procedureLabel");
         String address = optionalText(payload, "address");
         String label = !procedureLabel.isEmpty() ? procedureLabel
                 : !procedureType.isEmpty() ? procedureType : "Trámite vecinal";
-        StringBuilder body = new StringBuilder(main).append("\n\nTrámite: ").append(label);
+        StringBuilder body = new StringBuilder(main);
+        if (!rejectionReason.isEmpty()) {
+            body.append("\n\nMotivo: ").append(rejectionReason);
+        }
+        body.append("\n\n");
+        if (!folio.isEmpty()) {
+            body.append("Folio: ").append(folio).append('\n');
+        }
+        body.append("Trámite: ").append(label);
         if (!requestId.isEmpty()) {
             body.append("\nIdentificador: ").append(requestId);
         }
@@ -76,6 +91,15 @@ public class EmailConsumer {
             body.append("\nDirección: ").append(address);
         }
         sender.send(new EmailMessage(envelope.type(), recipient.textValue().trim(), subject, body.toString()));
+    }
+
+    /** Lee un texto obligatorio. Si falta o queda vacío, el mensaje no se puede reintentar. */
+    private static String requiredText(JsonNode payload, String field) {
+        String value = optionalText(payload, field);
+        if (value.isEmpty()) {
+            throw new NonRecoverableException("campo " + field + " es obligatorio y no debe estar vacío");
+        }
+        return value;
     }
 
     /**
