@@ -1,6 +1,6 @@
 package cl.duoc.barriodigital.notify;
 
-import cl.duoc.barriodigital.notify.messaging.ManualAckProcessor;
+import cl.duoc.barriodigital.notify.adapter.out.messaging.ManualAckProcessor;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.AcknowledgeMode;
 import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
