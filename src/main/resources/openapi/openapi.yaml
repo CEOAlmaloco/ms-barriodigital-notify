@@ -1,0 +1,13 @@
+openapi: 3.0.3
+info:
+  title: ms-barriodigital-notify
+  version: 1.0.0
+servers:
+  - url: /
+paths:
+  /actuator/health:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: OK
