@@ -4,6 +4,17 @@ Consumidor de **RabbitMQ** de BarrioDigital.
 
 Puerto: **8083**
 
+
+<!-- EP3.5-01 contratos -->
+## Contratos
+
+Contratos vigentes en `barriodigital-infra` (EP3.5-01). Índice: [docs/contratos](https://github.com/CEOAlmaloco/barriodigital-infra/blob/develop/docs/contratos/README.md).
+
+- [Eventos Rabbit](https://github.com/CEOAlmaloco/barriodigital-infra/blob/develop/docs/contratos/rabbit-eventos.md)
+- [Topología](https://github.com/CEOAlmaloco/barriodigital-infra/blob/develop/docs/contratos/rabbit-topologia.md)
+- [ACK / DLQ](https://github.com/CEOAlmaloco/barriodigital-infra/blob/develop/docs/contratos/rabbit-ack-dlq.md)
+- [Certificados PDF](https://github.com/CEOAlmaloco/barriodigital-infra/blob/develop/docs/contratos/notify-certificados.md)
+
 ## Responsabilidad
 
 Lee los eventos que publica `ms-barriodigital-requests` al crear o cambiar un trámite y ejecuta el efecto de cada uno:
@@ -16,7 +27,7 @@ Lee los eventos que publica `ms-barriodigital-requests` al crear o cambiar un tr
 
 No es público. No pasa por el API Gateway ni por el BFF: solo habla con el broker. El puerto 8083 queda para el health.
 
-Los contratos están en `barriodigital-infra/docs/decisiones.md`: mensajería (EP2-01), topología (EP2-02) y ACK, reintentos y DLQ (EP2-03).
+Los contratos están en `barriodigital-infra/docs/contratos/README.md`: mensajería (EP2-01), topología (EP2-02) y ACK, reintentos y DLQ (EP2-03).
 
 ## Estado (EP2-18)
 
@@ -237,7 +248,7 @@ Exchanges y colas son durables y sin auto-delete. Las tres colas principales son
 
 ## ACK, reintentos y DLQ
 
-Sigue el contrato EP2-03 de `barriodigital-infra/docs/decisiones.md` ("Contrato: ACK, reintentos y DLQ").
+Sigue el contrato EP2-03 de `barriodigital-infra/docs/contratos/README.md` ("Contrato: ACK, reintentos y DLQ").
 
 `application.yml` deja el listener en `acknowledge-mode: manual`, `prefetch: 10` y `default-requeue-rejected: false`. Ningún mensaje vuelve solo a la cola. Cada consumidor (EP2-16 a EP2-18) recibe el `Message` y el `Channel` y se los pasa a `ManualAckProcessor` junto con el nombre de su cola, leído de `RabbitNamesProperties`, y su handler. Ahí se decide la respuesta al broker:
 
