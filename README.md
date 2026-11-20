@@ -531,3 +531,8 @@ docker run --rm -p 8083:8083 `
 ## Git
 
 `.gitignore` cubre `target/` y `.env`. Los secretos solo van en `.env`.
+
+## Contratos verificables
+
+- El servicio no expone una API HTTP propia: solo el health de actuator, así que no publica OpenAPI.
+- La CI corre las pruebas, busca secretos en los commits nuevos con gitleaks y escanea la imagen con Trivy. Falla si el cambio agrega una vulnerabilidad crítica que la rama destino no tenía; las existentes quedan en el resumen del job.
